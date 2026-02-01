@@ -152,7 +152,7 @@ class SelectionView: NSView {
         let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()
         
-        // Black outline (thicker)
+        // Black outline
         NSColor.black.setStroke()
         let outline = NSBezierPath()
         outline.lineWidth = 5
@@ -275,15 +275,6 @@ class SelectionView: NSView {
     
     func setCrosshairCursor() {
         crosshairCursor?.set()
-        // Force cursor update by warping to current position
-        // NSEvent.mouseLocation is in screen coords (bottom-left origin)
-        // CGWarpMouseCursorPosition needs top-left origin
-        let mousePos = NSEvent.mouseLocation
-        if let screen = NSScreen.main {
-            let screenHeight = screen.frame.height
-            let cgPoint = CGPoint(x: mousePos.x, y: screenHeight - mousePos.y)
-            CGWarpMouseCursorPosition(cgPoint)
-        }
     }
 
     func stopMonitors() {
