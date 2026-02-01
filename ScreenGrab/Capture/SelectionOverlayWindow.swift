@@ -53,9 +53,9 @@ class SelectionOverlayWindow: NSPanel {
         makeKey()
         selectionView?.setupMonitors()
 
-        // Set cursor after brief delay
+        // Set cursor after brief delay - starts in select mode with arrow cursor
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.selectionView?.setCrosshairCursor()
+            self?.selectionView?.setInitialCursor()
         }
     }
 
@@ -71,17 +71,22 @@ class SelectionOverlayWindow: NSPanel {
     }
 }
 
-enum SelectionTool {
-    case select
-    case rectangle
-    case arrow
+enum CaptureMode {
+    case select        // Move/edit existing annotations
+    case regionSelect  // Draw screenshot capture area
+    case rectangle     // Draw rectangle annotation
+    case arrow         // Draw arrow annotation
 }
 
 class SelectionView: NSView {
     var onSelectionComplete: ((CGRect, [any Annotation]) -> Void)?
     var onCancel: (() -> Void)?
 
-    private var currentTool: SelectionTool = .select
+    private var currentMode: CaptureMode = .select {
+        didSet {
+            updateCursorForMode()
+        }
+    }
     private var selectionStart: NSPoint?
     private var selectionEnd: NSPoint?
     private var isSelecting = false
@@ -89,8 +94,17 @@ class SelectionView: NSView {
     private var isDrawingAnnotation = false
     private var annotationStart: NSPoint?
     private var annotationEnd: NSPoint?
-    private var currentDrawingTool: SelectionTool = .rectangle
+    private var currentDrawingTool: CaptureMode = .rectangle
     private var currentMousePosition: NSPoint?
+
+    // Selection/dragging state
+    private var selectedAnnotation: (any Annotation)?
+    private var activeHandle: AnnotationHandle?
+    private var isDraggingAnnotation = false
+    private var dragStartPoint: NSPoint?
+    private var dragStartBounds: CGRect?
+    private var dragStartArrowStart: CGPoint?
+    private var dragStartArrowEnd: CGPoint?
 
     private let annotationColor = NSColor.red.cgColor
     private let strokeWidth: CGFloat = 3.0
@@ -238,8 +252,21 @@ class SelectionView: NSView {
     }
 
     private func updateCoordDisplay(at point: NSPoint) {
-        // Coords are now baked into cursor - just update cursor image
-        updateCursorWithCoords(point)
+        // Only show coords cursor in non-select modes
+        if currentMode != .select {
+            updateCursorWithCoords(point)
+        }
+    }
+
+    private func updateCursorForMode() {
+        if currentMode == .select {
+            NSCursor.arrow.set()
+        } else if let pos = currentMousePosition {
+            updateCursorWithCoords(pos)
+        } else {
+            crosshairCursor?.set()
+        }
+        window?.invalidateCursorRects(for: self)
     }
 
     private func hideCoordDisplay() {
@@ -274,21 +301,31 @@ class SelectionView: NSView {
     }
 
     override func resetCursorRects() {
-        if let cursor = crosshairCursor {
+        if currentMode == .select {
+            addCursorRect(bounds, cursor: .arrow)
+        } else if let cursor = crosshairCursor {
             addCursorRect(bounds, cursor: cursor)
         }
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        crosshairCursor?.set()
+        if currentMode == .select {
+            NSCursor.arrow.set()
+        } else {
+            crosshairCursor?.set()
+        }
     }
 
     override func mouseEntered(with event: NSEvent) {
-        crosshairCursor?.set()
+        if currentMode == .select {
+            NSCursor.arrow.set()
+        } else {
+            crosshairCursor?.set()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
-        // Don't reset cursor - we want crosshair everywhere on our overlay
+        // Don't reset cursor - we control cursor everywhere on our overlay
     }
 
     func setupMonitors() {
@@ -307,6 +344,14 @@ class SelectionView: NSView {
         crosshairCursor?.set()
     }
 
+    func setInitialCursor() {
+        if currentMode == .select {
+            NSCursor.arrow.set()
+        } else {
+            crosshairCursor?.set()
+        }
+    }
+
     func stopMonitors() {
         stopDisplayLink()
         if let monitor = keyMonitor {
@@ -322,18 +367,21 @@ class SelectionView: NSView {
 
     private func handleKeyEvent(_ event: NSEvent) {
         switch event.keyCode {
-        case 53: // ESC
-            if currentTool != .select {
-                currentTool = .select
+        case 53: // ESC - return to select mode or cancel
+            if currentMode != .select {
+                currentMode = .select
                 needsDisplay = true
             } else {
                 onCancel?()
             }
-        case 15: // R
-            currentTool = .rectangle
+        case 48: // Tab - region select mode
+            currentMode = .regionSelect
             needsDisplay = true
-        case 0: // A
-            currentTool = .arrow
+        case 15: // R - rectangle annotation mode
+            currentMode = .rectangle
+            needsDisplay = true
+        case 0: // A - arrow annotation mode
+            currentMode = .arrow
             needsDisplay = true
         case 51: // Delete
             if !annotations.isEmpty {
@@ -351,15 +399,38 @@ class SelectionView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         hideCoordDisplay()
 
-        if currentTool == .rectangle || currentTool == .arrow {
-            isDrawingAnnotation = true
-            currentDrawingTool = currentTool
-            annotationStart = point
-            annotationEnd = point
-        } else {
+        switch currentMode {
+        case .select:
+            // Check if clicking on an annotation
+            for annotation in annotations.reversed() {
+                if let handle = annotation.hitTest(point: point) {
+                    selectedAnnotation = annotation
+                    activeHandle = handle
+                    isDraggingAnnotation = true
+                    dragStartPoint = point
+                    dragStartBounds = annotation.bounds
+
+                    if let arrow = annotation as? ArrowAnnotation {
+                        dragStartArrowStart = arrow.startPoint
+                        dragStartArrowEnd = arrow.endPoint
+                    }
+
+                    needsDisplay = true
+                    return
+                }
+            }
+            // Clicked on nothing - deselect
+            selectedAnnotation = nil
+            needsDisplay = true
+        case .regionSelect:
             selectionStart = point
             selectionEnd = point
             isSelecting = true
+        case .rectangle, .arrow:
+            isDrawingAnnotation = true
+            currentDrawingTool = currentMode
+            annotationStart = point
+            annotationEnd = point
         }
         needsDisplay = true
     }
@@ -367,18 +438,88 @@ class SelectionView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
 
-        if isDrawingAnnotation {
+        if isDraggingAnnotation, let selected = selectedAnnotation, let start = dragStartPoint {
+            let delta = CGPoint(x: point.x - start.x, y: point.y - start.y)
+
+            if let arrow = selected as? ArrowAnnotation {
+                switch activeHandle {
+                case .startPoint:
+                    if let originalStart = dragStartArrowStart {
+                        arrow.startPoint = CGPoint(x: originalStart.x + delta.x, y: originalStart.y + delta.y)
+                    }
+                case .endPoint:
+                    if let originalEnd = dragStartArrowEnd {
+                        arrow.endPoint = CGPoint(x: originalEnd.x + delta.x, y: originalEnd.y + delta.y)
+                    }
+                case .body:
+                    if let originalStart = dragStartArrowStart, let originalEnd = dragStartArrowEnd {
+                        arrow.startPoint = CGPoint(x: originalStart.x + delta.x, y: originalStart.y + delta.y)
+                        arrow.endPoint = CGPoint(x: originalEnd.x + delta.x, y: originalEnd.y + delta.y)
+                    }
+                default:
+                    break
+                }
+            } else if let originalBounds = dragStartBounds {
+                switch activeHandle {
+                case .body:
+                    selected.bounds = CGRect(
+                        x: originalBounds.origin.x + delta.x,
+                        y: originalBounds.origin.y + delta.y,
+                        width: originalBounds.width,
+                        height: originalBounds.height
+                    )
+                case .topRight:
+                    selected.bounds = CGRect(
+                        x: originalBounds.origin.x,
+                        y: originalBounds.origin.y,
+                        width: originalBounds.width + delta.x,
+                        height: originalBounds.height + delta.y
+                    )
+                case .topLeft:
+                    selected.bounds = CGRect(
+                        x: originalBounds.origin.x + delta.x,
+                        y: originalBounds.origin.y,
+                        width: originalBounds.width - delta.x,
+                        height: originalBounds.height + delta.y
+                    )
+                case .bottomRight:
+                    selected.bounds = CGRect(
+                        x: originalBounds.origin.x,
+                        y: originalBounds.origin.y + delta.y,
+                        width: originalBounds.width + delta.x,
+                        height: originalBounds.height - delta.y
+                    )
+                case .bottomLeft:
+                    selected.bounds = CGRect(
+                        x: originalBounds.origin.x + delta.x,
+                        y: originalBounds.origin.y + delta.y,
+                        width: originalBounds.width - delta.x,
+                        height: originalBounds.height - delta.y
+                    )
+                default:
+                    break
+                }
+            }
+            needsDisplay = true
+        } else if isDrawingAnnotation {
             annotationEnd = point
+            needsDisplay = true
         } else if isSelecting {
             selectionEnd = point
+            needsDisplay = true
         }
-        needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
 
-        if isDrawingAnnotation, let start = annotationStart, let end = annotationEnd {
+        if isDraggingAnnotation {
+            isDraggingAnnotation = false
+            dragStartPoint = nil
+            dragStartBounds = nil
+            dragStartArrowStart = nil
+            dragStartArrowEnd = nil
+        } else if isDrawingAnnotation, let start = annotationStart, let end = annotationEnd {
             isDrawingAnnotation = false
 
             if currentDrawingTool == .arrow {
@@ -400,7 +541,7 @@ class SelectionView: NSView {
                 }
             }
 
-            currentTool = .select
+            currentMode = .select
             annotationStart = nil
             annotationEnd = nil
         } else if isSelecting, let start = selectionStart, let end = selectionEnd {
@@ -411,6 +552,7 @@ class SelectionView: NSView {
                 onSelectionComplete?(rect, annotations)
             }
 
+            currentMode = .select
             selectionStart = nil
             selectionEnd = nil
         }
@@ -424,7 +566,11 @@ class SelectionView: NSView {
     override func mouseMoved(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
         // Coord display updated by 120Hz timer
-        crosshairCursor?.set()
+        if currentMode == .select {
+            NSCursor.arrow.set()
+        } else {
+            crosshairCursor?.set()
+        }
     }
 
     // MARK: - Drawing
@@ -456,6 +602,11 @@ class SelectionView: NSView {
         if let context = NSGraphicsContext.current?.cgContext {
             for annotation in annotations {
                 annotation.draw(in: context)
+
+                // Draw selection handles if selected
+                if let selected = selectedAnnotation, annotation.id == selected.id {
+                    drawSelectionHandles(for: annotation, in: context)
+                }
             }
 
             if isDrawingAnnotation, let start = annotationStart, let end = annotationEnd {
@@ -522,7 +673,7 @@ class SelectionView: NSView {
     private func drawInstructions() {
         let modeText: String
         let modeColor: NSColor
-        switch currentTool {
+        switch currentMode {
         case .rectangle:
             modeText = "🔴 RECTANGLE MODE"
             modeColor = NSColor.systemRed
@@ -532,6 +683,9 @@ class SelectionView: NSView {
         case .select:
             modeText = "🔲 SELECT MODE"
             modeColor = NSColor.white
+        case .regionSelect:
+            modeText = "✂️ REGION SELECT"
+            modeColor = NSColor.systemBlue
         }
         let modeAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 16, weight: .bold),
@@ -553,13 +707,15 @@ class SelectionView: NSView {
         modeText.draw(at: modePoint, withAttributes: modeAttrs)
 
         var text: String
-        switch currentTool {
+        switch currentMode {
         case .rectangle:
             text = "Drag to draw rectangle • ESC: Back to select"
         case .arrow:
             text = "Drag to draw arrow • ESC: Back to select"
         case .select:
-            text = "Drag to select & capture • R: Rectangle • A: Arrow • ESC: Cancel"
+            text = "Tab: Region select • R: Rectangle • A: Arrow • ESC: Cancel"
+        case .regionSelect:
+            text = "Drag to select & capture • ESC: Back to select"
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 14, weight: .medium),
@@ -590,5 +746,54 @@ class SelectionView: NSView {
         let width = abs(p2.x - p1.x)
         let height = abs(p2.y - p1.y)
         return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func drawSelectionHandles(for annotation: any Annotation, in context: CGContext) {
+        let handleSize: CGFloat = 8
+        let handleColor = NSColor.systemBlue.cgColor
+
+        context.setFillColor(handleColor)
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(1)
+
+        if let arrow = annotation as? ArrowAnnotation {
+            // Draw circular handles at arrow endpoints
+            let startHandle = CGRect(
+                x: arrow.startPoint.x - handleSize/2,
+                y: arrow.startPoint.y - handleSize/2,
+                width: handleSize,
+                height: handleSize
+            )
+            let endHandle = CGRect(
+                x: arrow.endPoint.x - handleSize/2,
+                y: arrow.endPoint.y - handleSize/2,
+                width: handleSize,
+                height: handleSize
+            )
+            context.fillEllipse(in: startHandle)
+            context.strokeEllipse(in: startHandle)
+            context.fillEllipse(in: endHandle)
+            context.strokeEllipse(in: endHandle)
+        } else {
+            // Draw square handles at corners for rectangles
+            let bounds = annotation.bounds
+            let corners = [
+                CGPoint(x: bounds.minX, y: bounds.minY),
+                CGPoint(x: bounds.maxX, y: bounds.minY),
+                CGPoint(x: bounds.minX, y: bounds.maxY),
+                CGPoint(x: bounds.maxX, y: bounds.maxY)
+            ]
+
+            for corner in corners {
+                let handleRect = CGRect(
+                    x: corner.x - handleSize/2,
+                    y: corner.y - handleSize/2,
+                    width: handleSize,
+                    height: handleSize
+                )
+                context.fill(handleRect)
+                context.stroke(handleRect)
+            }
+        }
     }
 }
