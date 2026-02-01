@@ -28,7 +28,7 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
    swift build -c release
    ```
 
-3. The built app will be at `.build/release/ShareXMac`
+3. The built app will be at `.build/release/ScreenGrab`
 
 ### Running the App
 
@@ -38,10 +38,10 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
 
 ```bash
 # Build and run directly
-swift build && .build/debug/ShareXMac
+swift build && .build/debug/ScreenGrab
 
 # Or for release build
-swift build -c release && .build/release/ShareXMac
+swift build -c release && .build/release/ScreenGrab
 ```
 
 The app runs in the background with a menu bar icon. To quit, click the menu bar icon and select "Quit" or press `⌘Q`.

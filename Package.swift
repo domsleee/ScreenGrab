@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "ShareXMac",
+    name: "ScreenGrab",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "ShareXMac", targets: ["ShareXMac"])
+        .executable(name: "ScreenGrab", targets: ["ScreenGrab"])
     ],
     dependencies: [
         .package(url: "https://github.com/soffes/HotKey", from: "0.2.0")
     ],
     targets: [
         .executableTarget(
-            name: "ShareXMac",
+            name: "ScreenGrab",
             dependencies: ["HotKey"],
-            path: "ShareXMac",
-            exclude: ["Resources/Info.plist", "Resources/ShareXMac.entitlements"]
+            path: "ScreenGrab",
+            exclude: ["Resources/Info.plist", "Resources/ScreenGrab.entitlements"]
         )
     ]
 )

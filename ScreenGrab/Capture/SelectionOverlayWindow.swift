@@ -27,6 +27,9 @@ class SelectionOverlayWindow: NSWindow {
         self.acceptsMouseMovedEvents = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         
+        // Disable window shadow for performance
+        self.hasShadow = false
+        
         let selectionView = SelectionView(frame: screen.frame)
         selectionView.onSelectionComplete = { [weak self] rect, annotations in
             guard let self = self else { return }
@@ -83,7 +86,7 @@ class SelectionView: NSView {
     private var isDrawingAnnotation = false
     private var annotationStart: NSPoint?
     private var annotationEnd: NSPoint?
-    private var currentDrawingTool: SelectionTool = .rectangle  // Track which tool we started drawing with
+    private var currentDrawingTool: SelectionTool = .rectangle
     
     private var currentMousePosition: NSPoint?
     
@@ -95,9 +98,13 @@ class SelectionView: NSView {
     private var globalKeyMonitor: Any?
     
     override var acceptsFirstResponder: Bool { true }
+    override var isOpaque: Bool { false }
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Use layer-backed view for better performance
+        wantsLayer = true
+        layer?.drawsAsynchronously = true
         setupTrackingArea()
         setupKeyMonitor()
     }

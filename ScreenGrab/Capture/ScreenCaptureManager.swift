@@ -31,30 +31,32 @@ class ScreenCaptureManager {
     }
     
     private func handleSelectionComplete(rect: CGRect, screenFrame: CGRect, annotations: [any Annotation]) {
-        // Convert to screen coordinates for capture
-        let captureRect = CGRect(
-            x: rect.origin.x + screenFrame.origin.x,
-            y: screenFrame.height - rect.origin.y - rect.height + screenFrame.origin.y,
-            width: rect.width,
-            height: rect.height
-        )
-        
-        // Capture the screen region
-        guard let cgImage = captureScreen(rect: captureRect) else {
-            print("Failed to capture screen")
-            closeOverlays()
-            return
+        autoreleasepool {
+            // Convert to screen coordinates for capture
+            let captureRect = CGRect(
+                x: rect.origin.x + screenFrame.origin.x,
+                y: screenFrame.height - rect.origin.y - rect.height + screenFrame.origin.y,
+                width: rect.width,
+                height: rect.height
+            )
+            
+            // Capture the screen region
+            guard let cgImage = captureScreen(rect: captureRect) else {
+                print("Failed to capture screen")
+                closeOverlays()
+                return
+            }
+            
+            var nsImage = NSImage(cgImage: cgImage, size: rect.size)
+            
+            // If we have annotations, render them onto the image
+            if !annotations.isEmpty {
+                nsImage = renderAnnotations(annotations, onto: nsImage, selectionRect: rect)
+            }
+            
+            // Copy to clipboard
+            ClipboardManager.copy(image: nsImage)
         }
-        
-        var nsImage = NSImage(cgImage: cgImage, size: rect.size)
-        
-        // If we have annotations, render them onto the image
-        if !annotations.isEmpty {
-            nsImage = renderAnnotations(annotations, onto: nsImage, selectionRect: rect)
-        }
-        
-        // Copy to clipboard
-        ClipboardManager.copy(image: nsImage)
         
         // Close overlays after everything is done
         DispatchQueue.main.async { [weak self] in
