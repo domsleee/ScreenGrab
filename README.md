@@ -1,4 +1,4 @@
-# ShareX Mac
+# ScreenGrab
 
 A lightweight screenshot tool for macOS with annotation capabilities, inspired by [ShareX](https://github.com/ShareX/ShareX).
 
@@ -28,21 +28,40 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
    swift build -c release
    ```
 
-3. The built app will be at `.build/release/ScreenGrab`
+3. Install to /Applications:
+   ```bash
+   cp .build/release/ScreenGrab ScreenGrab.app/Contents/MacOS/
+   codesign --force --deep --sign "ScreenGrab Dev" ScreenGrab.app
+   cp -r ScreenGrab.app /Applications/
+   ```
+
+### Code Signing (Important for Permissions)
+
+macOS requires consistent code signing to persist Screen Recording permissions across rebuilds. Without it, you'll be prompted for permissions every time you rebuild.
+
+**One-time setup - create a self-signed certificate:**
+
+1. Open **Keychain Access** (Spotlight → "Keychain Access")
+2. Menu: `Keychain Access` → `Certificate Assistant` → `Create a Certificate...`
+3. Name: `ScreenGrab Dev`
+4. Identity Type: `Self-Signed Root`
+5. Certificate Type: `Code Signing`
+6. Check `Let me override defaults`, click through all prompts
+7. After creation, find the certificate in Keychain Access
+8. Double-click it → expand `Trust` → set `Code Signing` to `Always Trust`
+
+**Build command (use this every time):**
+
+```bash
+swift build -c release && \
+cp .build/release/ScreenGrab ScreenGrab.app/Contents/MacOS/ && \
+codesign --force --deep --sign "ScreenGrab Dev" ScreenGrab.app && \
+cp -r ScreenGrab.app /Applications/
+```
 
 ### Running the App
 
-> ⚠️ **Note**: `swift run` doesn't work well with this app because it requires proper Application context for menu bar items and global hotkeys.
-
-**Recommended way to run:**
-
-```bash
-# Build and run directly
-swift build && .build/debug/ScreenGrab
-
-# Or for release build
-swift build -c release && .build/release/ScreenGrab
-```
+Launch from `/Applications/ScreenGrab.app` or Spotlight.
 
 The app runs in the background with a menu bar icon. To quit, click the menu bar icon and select "Quit" or press `⌘Q`.
 
@@ -77,7 +96,7 @@ On first launch, macOS will ask for **Screen Recording** permission. Grant this 
 
 ## Requirements
 
-- macOS 13.0 (Ventura) or later
+- macOS 14.0 (Sonoma) or later (uses ScreenCaptureKit)
 - Screen Recording permission
 
 ## License

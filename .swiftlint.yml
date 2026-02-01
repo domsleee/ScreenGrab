@@ -1,0 +1,51 @@
+# SwiftLint Configuration
+
+excluded:
+  - .build
+  - Package.swift
+
+# Rules configuration
+opt_in_rules:
+  - empty_count
+  - empty_string
+  - force_unwrapping
+
+disabled_rules:
+  - trailing_comma
+
+# Configurable rules
+line_length:
+  warning: 120
+  error: 200
+
+type_body_length:
+  warning: 400
+  error: 600
+
+file_length:
+  warning: 600
+  error: 1000
+
+function_body_length:
+  warning: 70
+  error: 120
+
+cyclomatic_complexity:
+  warning: 18
+  error: 30
+
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 50
+    error: 60
+  excluded:
+    - id
+    - x
+    - y
+    - i
+    - j
+    - dx
+    - dy

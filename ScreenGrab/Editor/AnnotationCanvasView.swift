@@ -6,43 +6,43 @@ class AnnotationCanvasView: NSView {
             updateCursor()
         }
     }
-    
+
     var onComplete: ((NSImage) -> Void)?
     var onCancel: (() -> Void)?
-    
+
     private let image: NSImage
     private var annotations: [Annotation] = []
     private var selectedAnnotation: Annotation?
     private var activeHandle: AnnotationHandle?
-    
+
     // Drawing state
     private var isDrawing = false
     private var drawStartPoint: CGPoint?
     private var currentDrawEndPoint: CGPoint?
-    
+
     // Dragging state
     private var isDragging = false
     private var dragStartPoint: CGPoint?
     private var dragStartBounds: CGRect?
     private var dragStartArrowStart: CGPoint?
     private var dragStartArrowEnd: CGPoint?
-    
+
     private let annotationColor = NSColor.red.cgColor
     private let strokeWidth: CGFloat = 3.0
-    
+
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false }
-    
+
     init(image: NSImage) {
         self.image = image
         super.init(frame: NSRect(origin: .zero, size: image.size))
         setupTrackingArea()
     }
-    
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     private func setupTrackingArea() {
         let trackingArea = NSTrackingArea(
             rect: bounds,
@@ -52,7 +52,7 @@ class AnnotationCanvasView: NSView {
         )
         addTrackingArea(trackingArea)
     }
-    
+
     private func updateCursor() {
         switch currentTool {
         case .select:
@@ -61,35 +61,35 @@ class AnnotationCanvasView: NSView {
             NSCursor.crosshair.set()
         }
     }
-    
+
     override func draw(_ dirtyRect: NSRect) {
         debugLog("DEBUG CANVAS: draw called, bounds: \(bounds)")
         // Draw image
         image.draw(in: bounds)
         debugLog("DEBUG CANVAS: image drawn")
-        
+
         // Draw existing annotations
-        guard let context = NSGraphicsContext.current?.cgContext else { 
+        guard let context = NSGraphicsContext.current?.cgContext else {
             debugLog("DEBUG CANVAS: no context")
-            return 
+            return
         }
-        
+
         debugLog("DEBUG CANVAS: drawing \(annotations.count) annotations")
         for annotation in annotations {
             annotation.draw(in: context)
-            
+
             // Draw selection handles if selected
             if annotation.id == selectedAnnotation?.id {
                 drawSelectionHandles(for: annotation, in: context)
             }
         }
-        
+
         // Draw current shape being created
         if isDrawing, let start = drawStartPoint, let end = currentDrawEndPoint {
             context.setStrokeColor(annotationColor)
             context.setFillColor(annotationColor)
             context.setLineWidth(strokeWidth)
-            
+
             switch currentTool {
             case .rectangle:
                 let rect = rectFromPoints(start, end)
@@ -102,29 +102,29 @@ class AnnotationCanvasView: NSView {
         }
         debugLog("DEBUG CANVAS: draw complete")
     }
-    
+
     private func drawArrowPreview(from start: CGPoint, to end: CGPoint, in context: CGContext) {
         let arrowHeadLength: CGFloat = 20.0
         let arrowHeadAngle: CGFloat = .pi / 6
-        
+
         // Draw line
         context.move(to: start)
         context.addLine(to: end)
         context.strokePath()
-        
+
         // Calculate arrow head
         let angle = atan2(end.y - start.y, end.x - start.x)
-        
+
         let arrowPoint1 = CGPoint(
             x: end.x - arrowHeadLength * cos(angle + arrowHeadAngle),
             y: end.y - arrowHeadLength * sin(angle + arrowHeadAngle)
         )
-        
+
         let arrowPoint2 = CGPoint(
             x: end.x - arrowHeadLength * cos(angle - arrowHeadAngle),
             y: end.y - arrowHeadLength * sin(angle - arrowHeadAngle)
         )
-        
+
         // Draw filled arrow head
         context.move(to: end)
         context.addLine(to: arrowPoint1)
@@ -132,15 +132,15 @@ class AnnotationCanvasView: NSView {
         context.closePath()
         context.fillPath()
     }
-    
+
     private func drawSelectionHandles(for annotation: Annotation, in context: CGContext) {
         let handleSize: CGFloat = 8
         let bounds = annotation.bounds
-        
+
         context.setFillColor(NSColor.white.cgColor)
         context.setStrokeColor(NSColor.systemBlue.cgColor)
         context.setLineWidth(1)
-        
+
         if let arrow = annotation as? ArrowAnnotation {
             // Draw handles at arrow endpoints
             let handles = [arrow.startPoint, arrow.endPoint]
@@ -162,7 +162,7 @@ class AnnotationCanvasView: NSView {
                 CGPoint(x: bounds.minX, y: bounds.maxY),
                 CGPoint(x: bounds.maxX, y: bounds.maxY)
             ]
-            
+
             for corner in corners {
                 let handleRect = CGRect(
                     x: corner.x - handleSize/2,
@@ -175,7 +175,7 @@ class AnnotationCanvasView: NSView {
             }
         }
     }
-    
+
     private func rectFromPoints(_ p1: CGPoint, _ p2: CGPoint) -> CGRect {
         let x = min(p1.x, p2.x)
         let y = min(p1.y, p2.y)
@@ -183,12 +183,12 @@ class AnnotationCanvasView: NSView {
         let height = abs(p2.y - p1.y)
         return CGRect(x: x, y: y, width: width, height: height)
     }
-    
+
     // MARK: - Mouse Events
-    
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        
+
         if currentTool == .select {
             // Check if clicking on an annotation
             for annotation in annotations.reversed() {
@@ -198,17 +198,17 @@ class AnnotationCanvasView: NSView {
                     isDragging = true
                     dragStartPoint = point
                     dragStartBounds = annotation.bounds
-                    
+
                     if let arrow = annotation as? ArrowAnnotation {
                         dragStartArrowStart = arrow.startPoint
                         dragStartArrowEnd = arrow.endPoint
                     }
-                    
+
                     needsDisplay = true
                     return
                 }
             }
-            
+
             // Clicked on nothing - deselect
             selectedAnnotation = nil
             needsDisplay = true
@@ -219,13 +219,13 @@ class AnnotationCanvasView: NSView {
             currentDrawEndPoint = point
         }
     }
-    
+
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        
+
         if isDragging, let selected = selectedAnnotation, let start = dragStartPoint {
             let delta = CGPoint(x: point.x - start.x, y: point.y - start.y)
-            
+
             if let arrow = selected as? ArrowAnnotation {
                 switch activeHandle {
                 case .startPoint:
@@ -285,14 +285,14 @@ class AnnotationCanvasView: NSView {
                     break
                 }
             }
-            
+
             needsDisplay = true
         } else if isDrawing {
             currentDrawEndPoint = point
             needsDisplay = true
         }
     }
-    
+
     override func mouseUp(with event: NSEvent) {
         if isDragging {
             isDragging = false
@@ -303,7 +303,7 @@ class AnnotationCanvasView: NSView {
             activeHandle = nil
         } else if isDrawing, let start = drawStartPoint, let end = currentDrawEndPoint {
             isDrawing = false
-            
+
             // Create annotation
             switch currentTool {
             case .rectangle:
@@ -317,7 +317,10 @@ class AnnotationCanvasView: NSView {
             case .arrow:
                 let distance = hypot(end.x - start.x, end.y - start.y)
                 if distance > 10 {
-                    let annotation = ArrowAnnotation(startPoint: start, endPoint: end, color: annotationColor, strokeWidth: strokeWidth)
+                    let annotation = ArrowAnnotation(
+                        startPoint: start, endPoint: end,
+                        color: annotationColor, strokeWidth: strokeWidth
+                    )
                     annotations.append(annotation)
                     selectedAnnotation = annotation
                     currentTool = .select
@@ -325,19 +328,19 @@ class AnnotationCanvasView: NSView {
             case .select:
                 break
             }
-            
+
             drawStartPoint = nil
             currentDrawEndPoint = nil
             needsDisplay = true
         }
     }
-    
+
     override func mouseMoved(with event: NSEvent) {
         updateCursor()
     }
-    
+
     // MARK: - Keyboard Events
-    
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 53: // ESC
@@ -369,29 +372,29 @@ class AnnotationCanvasView: NSView {
             super.keyDown(with: event)
         }
     }
-    
+
     func completeEditing() {
         let finalImage = renderFinalImage()
         onComplete?(finalImage)
     }
-    
+
     private func renderFinalImage() -> NSImage {
         let finalImage = NSImage(size: image.size)
-        
+
         finalImage.lockFocus()
-        
+
         // Draw original image
         image.draw(in: NSRect(origin: .zero, size: image.size))
-        
+
         // Draw annotations
         if let context = NSGraphicsContext.current?.cgContext {
             for annotation in annotations {
                 annotation.draw(in: context)
             }
         }
-        
+
         finalImage.unlockFocus()
-        
+
         return finalImage
     }
 }

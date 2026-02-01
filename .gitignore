@@ -25,6 +25,9 @@ DerivedData/
 .LSOverride
 ._*
 
+# Build artifacts
+*.app/
+
 # IDE
 .idea/
 *.swp
