@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import CoreVideo
 
 class SelectionOverlayWindow: NSPanel {
     var onSelectionComplete: ((CGRect, CGRect, [any Annotation]) -> Void)?
@@ -99,6 +100,7 @@ class SelectionView: NSView {
     private var coordLayer: CATextLayer?
     private var coordBgLayer: CALayer?
     private var crosshairCursor: NSCursor?
+    private var coordTimer: Timer?
 
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { false }
@@ -124,97 +126,119 @@ class SelectionView: NSView {
         setupCoordLayer()
     }
     
+    private func setupDisplayLink() {
+        // Poll mouse position at 120Hz for smooth coordinate updates
+        coordTimer = Timer(timeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
+            guard let self = self, let window = self.window else { return }
+            let screenPos = NSEvent.mouseLocation
+            let windowPos = window.convertPoint(fromScreen: screenPos)
+            let viewPos = self.convert(windowPos, from: nil)
+            self.updateCoordDisplay(at: viewPos)
+        }
+        RunLoop.main.add(coordTimer!, forMode: .common)
+    }
+    
+    private func stopDisplayLink() {
+        coordTimer?.invalidate()
+        coordTimer = nil
+    }
+    
     private func setupCoordLayer() {
+        // Coords are now baked into cursor image - no separate layer needed
+        // Keep empty layers to avoid nil checks elsewhere
         let bg = CALayer()
-        bg.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
-        bg.cornerRadius = 3
-        bg.actions = ["position": NSNull(), "bounds": NSNull()]
+        bg.isHidden = true
         layer?.addSublayer(bg)
         coordBgLayer = bg
         
         let text = CATextLayer()
-        text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        text.fontSize = 11
-        text.foregroundColor = NSColor.white.cgColor
-        text.alignmentMode = .left
-        text.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
-        text.actions = ["position": NSNull(), "bounds": NSNull(), "string": NSNull()]
+        text.isHidden = true
         layer?.addSublayer(text)
         coordLayer = text
     }
     
     private func createCrosshairCursor() {
-        let size: CGFloat = 33
-        let center = size / 2
+        updateCursorWithCoords(NSPoint(x: 0, y: 0))
+    }
+    
+    private func updateCursorWithCoords(_ point: NSPoint) {
+        let crosshairSize: CGFloat = 33
+        let center = crosshairSize / 2
         let armLength: CGFloat = 14
         let gap: CGFloat = 3
         
-        let image = NSImage(size: NSSize(width: size, height: size))
+        // Coord text
+        let coordText = "\(Int(point.x)), \(Int(point.y))"
+        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white
+        ]
+        let textSize = (coordText as NSString).size(withAttributes: attrs)
+        
+        // Image size includes crosshair + text below-right
+        let textPadding: CGFloat = 6
+        let textOffsetX: CGFloat = 18
+        let textOffsetY: CGFloat = 4
+        let totalWidth = max(crosshairSize, textOffsetX + textSize.width + textPadding * 2)
+        let totalHeight = crosshairSize + textSize.height + textPadding
+        
+        let image = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
         image.lockFocus()
+        
+        // Draw crosshair at top-center area
+        let crosshairY = totalHeight - crosshairSize
         
         // Black outline
         NSColor.black.setStroke()
         let outline = NSBezierPath()
         outline.lineWidth = 5
-        outline.move(to: NSPoint(x: center - armLength, y: center))
-        outline.line(to: NSPoint(x: center - gap, y: center))
-        outline.move(to: NSPoint(x: center + gap, y: center))
-        outline.line(to: NSPoint(x: center + armLength, y: center))
-        outline.move(to: NSPoint(x: center, y: center - armLength))
-        outline.line(to: NSPoint(x: center, y: center - gap))
-        outline.move(to: NSPoint(x: center, y: center + gap))
-        outline.line(to: NSPoint(x: center, y: center + armLength))
+        outline.move(to: NSPoint(x: center - armLength, y: crosshairY + center))
+        outline.line(to: NSPoint(x: center - gap, y: crosshairY + center))
+        outline.move(to: NSPoint(x: center + gap, y: crosshairY + center))
+        outline.line(to: NSPoint(x: center + armLength, y: crosshairY + center))
+        outline.move(to: NSPoint(x: center, y: crosshairY + center - armLength))
+        outline.line(to: NSPoint(x: center, y: crosshairY + center - gap))
+        outline.move(to: NSPoint(x: center, y: crosshairY + center + gap))
+        outline.line(to: NSPoint(x: center, y: crosshairY + center + armLength))
         outline.stroke()
         
         // White inner line
         NSColor.white.setStroke()
         let inner = NSBezierPath()
         inner.lineWidth = 2
-        inner.move(to: NSPoint(x: center - armLength, y: center))
-        inner.line(to: NSPoint(x: center - gap, y: center))
-        inner.move(to: NSPoint(x: center + gap, y: center))
-        inner.line(to: NSPoint(x: center + armLength, y: center))
-        inner.move(to: NSPoint(x: center, y: center - armLength))
-        inner.line(to: NSPoint(x: center, y: center - gap))
-        inner.move(to: NSPoint(x: center, y: center + gap))
-        inner.line(to: NSPoint(x: center, y: center + armLength))
+        inner.move(to: NSPoint(x: center - armLength, y: crosshairY + center))
+        inner.line(to: NSPoint(x: center - gap, y: crosshairY + center))
+        inner.move(to: NSPoint(x: center + gap, y: crosshairY + center))
+        inner.line(to: NSPoint(x: center + armLength, y: crosshairY + center))
+        inner.move(to: NSPoint(x: center, y: crosshairY + center - armLength))
+        inner.line(to: NSPoint(x: center, y: crosshairY + center - gap))
+        inner.move(to: NSPoint(x: center, y: crosshairY + center + gap))
+        inner.line(to: NSPoint(x: center, y: crosshairY + center + armLength))
         inner.stroke()
+        
+        // Draw coord background
+        let bgRect = NSRect(x: textOffsetX - textPadding, y: 0,
+                           width: textSize.width + textPadding * 2, height: textSize.height + textPadding)
+        NSColor.black.withAlphaComponent(0.7).setFill()
+        NSBezierPath(roundedRect: bgRect, xRadius: 3, yRadius: 3).fill()
+        
+        // Draw coord text
+        (coordText as NSString).draw(at: NSPoint(x: textOffsetX, y: textPadding / 2), withAttributes: attrs)
         
         image.unlockFocus()
         
-        crosshairCursor = NSCursor(image: image, hotSpot: NSPoint(x: center, y: center))
+        crosshairCursor = NSCursor(image: image, hotSpot: NSPoint(x: center, y: crosshairY + center))
+        crosshairCursor?.set()
     }
     
     private func updateCoordDisplay(at point: NSPoint) {
-        guard let textLayer = coordLayer, let bgLayer = coordBgLayer else { return }
-        
-        let coordText = "\(Int(point.x)), \(Int(point.y))"
-        textLayer.string = coordText
-        
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        let textSize = (coordText as NSString).size(withAttributes: attrs)
-        
-        let padding: CGFloat = 4
-        let x = point.x + 18
-        let y = point.y - textSize.height - 12
-        
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        bgLayer.frame = CGRect(x: x - padding, y: y - padding/2, 
-                                width: textSize.width + padding * 2, height: textSize.height + padding)
-        textLayer.frame = CGRect(x: x, y: y, width: textSize.width + 10, height: textSize.height + 4)
-        bgLayer.isHidden = false
-        textLayer.isHidden = false
-        CATransaction.commit()
+        // Coords are now baked into cursor - just update cursor image
+        updateCursorWithCoords(point)
     }
     
     private func hideCoordDisplay() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        coordBgLayer?.isHidden = true
-        coordLayer?.isHidden = true
-        CATransaction.commit()
+        // No longer needed - coords are in cursor
     }
 
     deinit {
@@ -271,6 +295,7 @@ class SelectionView: NSView {
             return nil
         }
         window?.invalidateCursorRects(for: self)
+        setupDisplayLink()
     }
     
     func setCrosshairCursor() {
@@ -278,6 +303,7 @@ class SelectionView: NSView {
     }
 
     func stopMonitors() {
+        stopDisplayLink()
         if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
             keyMonitor = nil
@@ -392,10 +418,7 @@ class SelectionView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
-        if let pos = currentMousePosition {
-            updateCoordDisplay(at: pos)
-        }
-        // Ensure crosshair on every move
+        // Coord display updated by 120Hz timer
         crosshairCursor?.set()
     }
 
