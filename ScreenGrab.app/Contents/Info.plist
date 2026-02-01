@@ -22,5 +22,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>ScreenGrab needs screen recording permission to capture screenshots.</string>
 </dict>
 </plist>

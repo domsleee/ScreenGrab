@@ -47,12 +47,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func checkScreenRecordingPermission() {
+        // Only check, don't request - the system will prompt when we actually try to capture
         let hasPermission = CGPreflightScreenCaptureAccess()
-        if !hasPermission {
-            logWarn("Screen recording permission not granted, requesting...")
-            CGRequestScreenCaptureAccess()
-        } else {
+        if hasPermission {
             logDebug("Screen recording permission OK")
+        } else {
+            logDebug("Screen recording permission not yet granted")
         }
     }
 }

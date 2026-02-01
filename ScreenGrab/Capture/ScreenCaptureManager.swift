@@ -5,12 +5,16 @@ class ScreenCaptureManager {
     private var overlayWindows: [SelectionOverlayWindow] = []
     private var editorWindow: NSWindow?
     private var canvasView: AnnotationCanvasView?
+    private var previousApp: NSRunningApplication?
     
     func startCapture() {
         // Close any existing overlays
         closeOverlays()
         
-        // Temporarily become a regular app to receive keyboard focus
+        // Remember the currently active app to restore later
+        previousApp = NSWorkspace.shared.frontmostApplication
+        
+        // Temporarily become a regular app to receive keyboard/mouse focus
         NSApp.setActivationPolicy(.regular)
         
         // Create overlay windows for all screens
@@ -87,6 +91,12 @@ class ScreenCaptureManager {
         
         // Go back to accessory app (menu bar only)
         NSApp.setActivationPolicy(.accessory)
+        
+        // Restore focus to the previously active app
+        if let app = previousApp {
+            app.activate(options: [])
+            previousApp = nil
+        }
     }
     
     private func renderAnnotations(_ annotations: [any Annotation], onto image: NSImage, selectionRect: CGRect) -> NSImage {
