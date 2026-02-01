@@ -8,7 +8,6 @@ class SelectionOverlayWindow: NSPanel {
     private var screenFrame: CGRect = .zero
     private var selectionView: SelectionView?
 
-    // Allow becoming key to receive mouse events, but don't become main
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
@@ -21,7 +20,6 @@ class SelectionOverlayWindow: NSPanel {
         )
 
         self.screenFrame = screen.frame
-
         self.isOpaque = false
         self.backgroundColor = .clear
         self.level = .screenSaver
@@ -41,25 +39,31 @@ class SelectionOverlayWindow: NSPanel {
             self?.onCancel?()
         }
         self.selectionView = selectionView
-
         self.contentView = selectionView
     }
 
     func show() {
+        // Temporarily activate app to ensure cursor works, then set to accessory
+        let previousPolicy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.activate(ignoringOtherApps: true)
+        
         orderFrontRegardless()
         makeKey()
         selectionView?.setupMonitors()
-        selectionView?.setCrosshairCursor()
+        
+        // Set cursor after brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.selectionView?.setCrosshairCursor()
+        }
     }
 
     func stopEventMonitors() {
         selectionView?.stopMonitors()
-        selectionView?.resetCursor()
     }
 
     override func close() {
         selectionView?.stopMonitors()
-        selectionView?.resetCursor()
         selectionView?.onSelectionComplete = nil
         selectionView?.onCancel = nil
         super.close()
@@ -77,19 +81,14 @@ class SelectionView: NSView {
     var onCancel: (() -> Void)?
 
     private var currentTool: SelectionTool = .select
-
-    // Region selection state
     private var selectionStart: NSPoint?
     private var selectionEnd: NSPoint?
     private var isSelecting = false
-
-    // Annotation state
     private var annotations: [any Annotation] = []
     private var isDrawingAnnotation = false
     private var annotationStart: NSPoint?
     private var annotationEnd: NSPoint?
     private var currentDrawingTool: SelectionTool = .rectangle
-
     private var currentMousePosition: NSPoint?
 
     private let annotationColor = NSColor.red.cgColor
@@ -97,9 +96,9 @@ class SelectionView: NSView {
 
     private var keyMonitor: Any?
     private var localKeyMonitor: Any?
-    private var crosshairCursor: NSCursor?
     private var coordLayer: CATextLayer?
     private var coordBgLayer: CALayer?
+    private var crosshairCursor: NSCursor?
 
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { false }
@@ -120,21 +119,19 @@ class SelectionView: NSView {
         layer?.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
         canDrawSubviewsIntoLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
-        setupTrackingArea()
         createCrosshairCursor()
+        setupTrackingArea()
         setupCoordLayer()
     }
     
     private func setupCoordLayer() {
-        // Background layer
         let bg = CALayer()
         bg.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
         bg.cornerRadius = 3
-        bg.actions = ["position": NSNull(), "bounds": NSNull()]  // Disable animations
+        bg.actions = ["position": NSNull(), "bounds": NSNull()]
         layer?.addSublayer(bg)
         coordBgLayer = bg
         
-        // Text layer
         let text = CATextLayer()
         text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         text.fontSize = 11
@@ -146,74 +143,37 @@ class SelectionView: NSView {
         coordLayer = text
     }
     
-    private func updateCoordDisplay(at point: NSPoint) {
-        guard let textLayer = coordLayer, let bgLayer = coordBgLayer else { return }
-        
-        let coordText = "\(Int(point.x)), \(Int(point.y))"
-        textLayer.string = coordText
-        
-        // Calculate size
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        let textSize = (coordText as NSString).size(withAttributes: attrs)
-        
-        let padding: CGFloat = 4
-        let offsetX: CGFloat = 18
-        let offsetY: CGFloat = 12
-        
-        // Position layers (CALayer uses bottom-left origin like NSView)
-        let x = point.x + offsetX
-        let y = point.y - textSize.height - offsetY
-        
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        bgLayer.frame = CGRect(x: x - padding, y: y - padding/2, 
-                                width: textSize.width + padding * 2, height: textSize.height + padding)
-        textLayer.frame = CGRect(x: x, y: y, width: textSize.width + 10, height: textSize.height + 4)
-        CATransaction.commit()
-    }
-
-    deinit {
-        stopMonitors()
-    }
-    
     private func createCrosshairCursor() {
-        let size: CGFloat = 31  // Odd number for center pixel
+        let size: CGFloat = 33
         let center = size / 2
-        let armLength: CGFloat = 13
-        let gap: CGFloat = 2
-        let lineWidth: CGFloat = 1.0
-        let outlineWidth: CGFloat = 3.0
+        let armLength: CGFloat = 14
+        let gap: CGFloat = 3
         
         let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()
         
-        // Draw black outline
+        // Black outline (thicker)
         NSColor.black.setStroke()
         let outline = NSBezierPath()
-        outline.lineWidth = outlineWidth
-        // Horizontal
+        outline.lineWidth = 5
         outline.move(to: NSPoint(x: center - armLength, y: center))
         outline.line(to: NSPoint(x: center - gap, y: center))
         outline.move(to: NSPoint(x: center + gap, y: center))
         outline.line(to: NSPoint(x: center + armLength, y: center))
-        // Vertical
         outline.move(to: NSPoint(x: center, y: center - armLength))
         outline.line(to: NSPoint(x: center, y: center - gap))
         outline.move(to: NSPoint(x: center, y: center + gap))
         outline.line(to: NSPoint(x: center, y: center + armLength))
         outline.stroke()
         
-        // Draw white line on top
+        // White inner line
         NSColor.white.setStroke()
         let inner = NSBezierPath()
-        inner.lineWidth = lineWidth
-        // Horizontal
+        inner.lineWidth = 2
         inner.move(to: NSPoint(x: center - armLength, y: center))
         inner.line(to: NSPoint(x: center - gap, y: center))
         inner.move(to: NSPoint(x: center + gap, y: center))
         inner.line(to: NSPoint(x: center + armLength, y: center))
-        // Vertical
         inner.move(to: NSPoint(x: center, y: center - armLength))
         inner.line(to: NSPoint(x: center, y: center - gap))
         inner.move(to: NSPoint(x: center, y: center + gap))
@@ -225,24 +185,46 @@ class SelectionView: NSView {
         crosshairCursor = NSCursor(image: image, hotSpot: NSPoint(x: center, y: center))
     }
     
-    func setCrosshairCursor() {
-        crosshairCursor?.set()
+    private func updateCoordDisplay(at point: NSPoint) {
+        guard let textLayer = coordLayer, let bgLayer = coordBgLayer else { return }
+        
+        let coordText = "\(Int(point.x)), \(Int(point.y))"
+        textLayer.string = coordText
+        
+        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        let textSize = (coordText as NSString).size(withAttributes: attrs)
+        
+        let padding: CGFloat = 4
+        let x = point.x + 18
+        let y = point.y - textSize.height - 12
+        
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bgLayer.frame = CGRect(x: x - padding, y: y - padding/2, 
+                                width: textSize.width + padding * 2, height: textSize.height + padding)
+        textLayer.frame = CGRect(x: x, y: y, width: textSize.width + 10, height: textSize.height + 4)
+        bgLayer.isHidden = false
+        textLayer.isHidden = false
+        CATransaction.commit()
     }
     
-    func resetCursor() {
-        NSCursor.arrow.set()
+    private func hideCoordDisplay() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        coordBgLayer?.isHidden = true
+        coordLayer?.isHidden = true
+        CATransaction.commit()
     }
-    
-    override func resetCursorRects() {
-        if let cursor = crosshairCursor {
-            addCursorRect(bounds, cursor: cursor)
-        }
+
+    deinit {
+        stopMonitors()
     }
     
     private func setupTrackingArea() {
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.activeAlways, .mouseMoved, .inVisibleRect, .cursorUpdate],
+            options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -255,20 +237,52 @@ class SelectionView: NSView {
             let screenPos = NSEvent.mouseLocation
             let windowPos = window.convertPoint(fromScreen: screenPos)
             currentMousePosition = convert(windowPos, from: nil)
-            needsDisplay = true
+            if let pos = currentMousePosition {
+                updateCoordDisplay(at: pos)
+            }
+            window.invalidateCursorRects(for: self)
         }
+    }
+    
+    override func resetCursorRects() {
+        if let cursor = crosshairCursor {
+            addCursorRect(bounds, cursor: cursor)
+        }
+    }
+    
+    override func cursorUpdate(with event: NSEvent) {
+        crosshairCursor?.set()
+    }
+    
+    override func mouseEntered(with event: NSEvent) {
+        crosshairCursor?.set()
+    }
+    
+    override func mouseExited(with event: NSEvent) {
+        // Don't reset cursor - we want crosshair everywhere on our overlay
     }
 
     func setupMonitors() {
-        // Global keyboard monitor (works even when not focused)
         keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyEvent(event)
         }
-        
-        // Local keyboard monitor (when focused)
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyEvent(event)
             return nil
+        }
+        window?.invalidateCursorRects(for: self)
+    }
+    
+    func setCrosshairCursor() {
+        crosshairCursor?.set()
+        // Force cursor update by warping to current position
+        // NSEvent.mouseLocation is in screen coords (bottom-left origin)
+        // CGWarpMouseCursorPosition needs top-left origin
+        let mousePos = NSEvent.mouseLocation
+        if let screen = NSScreen.main {
+            let screenHeight = screen.frame.height
+            let cgPoint = CGPoint(x: mousePos.x, y: screenHeight - mousePos.y)
+            CGWarpMouseCursorPosition(cgPoint)
         }
     }
 
@@ -281,7 +295,7 @@ class SelectionView: NSView {
             NSEvent.removeMonitor(monitor)
             localKeyMonitor = nil
         }
-        NSCursor.unhide()
+        NSCursor.pop()
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
@@ -309,10 +323,11 @@ class SelectionView: NSView {
         }
     }
 
-    // MARK: - Mouse Events (standard NSView)
+    // MARK: - Mouse Events
     
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        hideCoordDisplay()
 
         if currentTool == .rectangle || currentTool == .arrow {
             isDrawingAnnotation = true
@@ -377,17 +392,20 @@ class SelectionView: NSView {
             selectionStart = nil
             selectionEnd = nil
         }
+        
+        if let pos = currentMousePosition {
+            updateCoordDisplay(at: pos)
+        }
         needsDisplay = true
     }
 
     override func mouseMoved(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
-        // Only update the coord layer, don't redraw entire view
-        if let pos = currentMousePosition, !isSelecting && !isDrawingAnnotation {
+        if let pos = currentMousePosition {
             updateCoordDisplay(at: pos)
-            coordLayer?.isHidden = false
-            coordBgLayer?.isHidden = false
         }
+        // Ensure crosshair on every move
+        crosshairCursor?.set()
     }
 
     // MARK: - Drawing
@@ -395,12 +413,6 @@ class SelectionView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.15).setFill()
         bounds.fill()
-        
-        // Hide coord layers during selection/drawing (will show via mouseMoved when idle)
-        if isSelecting || isDrawingAnnotation {
-            coordLayer?.isHidden = true
-            coordBgLayer?.isHidden = true
-        }
 
         if isSelecting, let start = selectionStart, let end = selectionEnd {
             let rect = rectFromPoints(start, end)
