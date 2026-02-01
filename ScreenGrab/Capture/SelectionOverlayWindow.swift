@@ -186,10 +186,11 @@ class SelectionView: NSView {
     }
 
     private func createCrosshairCursor() {
-        updateCursorWithCoords(NSPoint(x: 0, y: 0))
+        // Just create the cursor image, don't set it (we start in select mode with arrow cursor)
+        buildCrosshairCursor(at: NSPoint(x: 0, y: 0))
     }
 
-    private func updateCursorWithCoords(_ point: NSPoint) {
+    private func buildCrosshairCursor(at point: NSPoint) {
         let crosshairSize: CGFloat = 33
         let center = crosshairSize / 2
         let armLength: CGFloat = 14
@@ -260,6 +261,10 @@ class SelectionView: NSView {
 
         // Hotspot at crosshair center
         crosshairCursor = NSCursor(image: image, hotSpot: NSPoint(x: center, y: center))
+    }
+
+    private func updateCursorWithCoords(_ point: NSPoint) {
+        buildCrosshairCursor(at: point)
         crosshairCursor?.set()
     }
 
