@@ -31,6 +31,20 @@ class ScreenCaptureManager {
     }
     
     private func handleSelectionComplete(rect: CGRect, screenFrame: CGRect, annotations: [any Annotation]) {
+        logInfo("Selection complete: \(Int(rect.width))x\(Int(rect.height)) with \(annotations.count) annotations")
+        
+        // Hide overlays FIRST so they don't appear in the capture
+        for window in overlayWindows {
+            window.orderOut(nil)
+        }
+        
+        // Small delay to ensure windows are fully hidden before capture
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.performCapture(rect: rect, screenFrame: screenFrame, annotations: annotations)
+        }
+    }
+    
+    private func performCapture(rect: CGRect, screenFrame: CGRect, annotations: [any Annotation]) {
         autoreleasepool {
             // Convert to screen coordinates for capture
             let captureRect = CGRect(
@@ -42,12 +56,13 @@ class ScreenCaptureManager {
             
             // Capture the screen region
             guard let cgImage = captureScreen(rect: captureRect) else {
-                print("Failed to capture screen")
-                closeOverlays()
+                logError("Failed to capture screen")
+                cleanupOverlays()
                 return
             }
             
             var nsImage = NSImage(cgImage: cgImage, size: rect.size)
+            logDebug("Captured image: \(cgImage.width)x\(cgImage.height)")
             
             // If we have annotations, render them onto the image
             if !annotations.isEmpty {
@@ -56,12 +71,22 @@ class ScreenCaptureManager {
             
             // Copy to clipboard
             ClipboardManager.copy(image: nsImage)
+            logInfo("Copied to clipboard")
         }
         
-        // Close overlays after everything is done
-        DispatchQueue.main.async { [weak self] in
-            self?.closeOverlays()
+        cleanupOverlays()
+    }
+    
+    private func cleanupOverlays() {
+        for window in overlayWindows {
+            window.onSelectionComplete = nil
+            window.onCancel = nil
+            window.stopKeyMonitors()
         }
+        overlayWindows.removeAll()
+        
+        // Go back to accessory app (menu bar only)
+        NSApp.setActivationPolicy(.accessory)
     }
     
     private func renderAnnotations(_ annotations: [any Annotation], onto image: NSImage, selectionRect: CGRect) -> NSImage {
@@ -186,15 +211,8 @@ class ScreenCaptureManager {
     
     private func closeOverlays() {
         for window in overlayWindows {
-            // Clear callbacks and stop monitors
-            window.onSelectionComplete = nil
-            window.onCancel = nil
-            window.stopKeyMonitors()
             window.orderOut(nil)
         }
-        overlayWindows.removeAll()
-        
-        // Go back to accessory app (menu bar only)
-        NSApp.setActivationPolicy(.accessory)
+        cleanupOverlays()
     }
 }

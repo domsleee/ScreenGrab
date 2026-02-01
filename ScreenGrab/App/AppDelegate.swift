@@ -7,19 +7,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenCaptureManager: ScreenCaptureManager?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        logInfo("ScreenGrab starting up")
         setupStatusItem()
         setupHotKey()
         screenCaptureManager = ScreenCaptureManager()
         
         // Check screen recording permission
         checkScreenRecordingPermission()
+        logInfo("ScreenGrab ready")
     }
     
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "ShareX Mac")
+            button.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "ScreenGrab")
         }
         
         let menu = NSMenu()
@@ -36,16 +38,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey?.keyDownHandler = { [weak self] in
             self?.startCapture()
         }
+        logDebug("Hotkey registered: Cmd+Shift+2")
     }
     
     @objc func startCapture() {
+        logInfo("Capture triggered")
         screenCaptureManager?.startCapture()
     }
     
     private func checkScreenRecordingPermission() {
         let hasPermission = CGPreflightScreenCaptureAccess()
         if !hasPermission {
+            logWarn("Screen recording permission not granted, requesting...")
             CGRequestScreenCaptureAccess()
+        } else {
+            logDebug("Screen recording permission OK")
         }
     }
 }

@@ -105,12 +105,19 @@ class SelectionView: NSView {
         // Use layer-backed view for better performance
         wantsLayer = true
         layer?.drawsAsynchronously = true
+        // Disable implicit animations to reduce flicker
+        layer?.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        canDrawSubviewsIntoLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         setupTrackingArea()
         setupKeyMonitor()
     }
     
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        wantsLayer = true
+        layer?.drawsAsynchronously = true
+        layer?.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
         setupTrackingArea()
         setupKeyMonitor()
     }
@@ -419,6 +426,9 @@ class SelectionView: NSView {
     }
     
     override func mouseUp(with event: NSEvent) {
+        // Update mouse position to current location
+        currentMousePosition = convert(event.locationInWindow, from: nil)
+        
         if isDrawingAnnotation, let start = annotationStart, let end = annotationEnd {
             isDrawingAnnotation = false
             
