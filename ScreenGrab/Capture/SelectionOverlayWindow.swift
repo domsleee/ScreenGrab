@@ -792,15 +792,30 @@ class SelectionView: NSView {
 
     // MARK: - CALayer-based Annotation Rendering
 
+    private var arrowHeadLayers: [UUID: CAShapeLayer] = [:]
+
     private func createAnnotationLayer(for annotation: any Annotation) -> CAShapeLayer {
         let shapeLayer = CAShapeLayer()
         shapeLayer.strokeColor = annotation.color
-        shapeLayer.fillColor = nil
         shapeLayer.lineWidth = annotation.strokeWidth
         shapeLayer.lineCap = .round
         shapeLayer.lineJoin = .round
         // Disable implicit animations
         shapeLayer.actions = ["path": NSNull(), "position": NSNull(), "bounds": NSNull()]
+
+        if annotation is ArrowAnnotation {
+            shapeLayer.fillColor = nil
+            // Create separate layer for filled arrowhead
+            let headLayer = CAShapeLayer()
+            headLayer.fillColor = annotation.color
+            headLayer.strokeColor = nil
+            headLayer.actions = ["path": NSNull(), "position": NSNull(), "bounds": NSNull()]
+            layer?.addSublayer(headLayer)
+            arrowHeadLayers[annotation.id] = headLayer
+        } else {
+            shapeLayer.fillColor = nil
+        }
+
         updateLayerPath(shapeLayer, for: annotation)
         return shapeLayer
     }
@@ -809,11 +824,7 @@ class SelectionView: NSView {
         let path = CGMutablePath()
 
         if let arrow = annotation as? ArrowAnnotation {
-            // Draw arrow line
-            path.move(to: arrow.startPoint)
-            path.addLine(to: arrow.endPoint)
-
-            // Draw arrow head
+            // Draw arrow line (stop at base of arrowhead)
             let angle = atan2(arrow.endPoint.y - arrow.startPoint.y, arrow.endPoint.x - arrow.startPoint.x)
             let arrowHeadLength: CGFloat = 20.0
             let arrowHeadAngle: CGFloat = .pi / 6
@@ -826,12 +837,24 @@ class SelectionView: NSView {
                 x: arrow.endPoint.x - arrowHeadLength * cos(angle - arrowHeadAngle),
                 y: arrow.endPoint.y - arrowHeadLength * sin(angle - arrowHeadAngle)
             )
-            path.move(to: arrow.endPoint)
-            path.addLine(to: arrowPoint1)
-            path.move(to: arrow.endPoint)
-            path.addLine(to: arrowPoint2)
 
-            shapeLayer.fillColor = nil
+            // Line stops at arrow base
+            let arrowBasePoint = CGPoint(
+                x: (arrowPoint1.x + arrowPoint2.x) / 2,
+                y: (arrowPoint1.y + arrowPoint2.y) / 2
+            )
+            path.move(to: arrow.startPoint)
+            path.addLine(to: arrowBasePoint)
+
+            // Update arrowhead layer with filled triangle
+            if let headLayer = arrowHeadLayers[arrow.id] {
+                let headPath = CGMutablePath()
+                headPath.move(to: arrow.endPoint)
+                headPath.addLine(to: arrowPoint1)
+                headPath.addLine(to: arrowPoint2)
+                headPath.closeSubpath()
+                headLayer.path = headPath
+            }
         } else {
             // Rectangle
             path.addRect(annotation.bounds)
@@ -893,6 +916,7 @@ class SelectionView: NSView {
     }
 
     private var drawingPreviewLayer: CAShapeLayer?
+    private var drawingPreviewHeadLayer: CAShapeLayer?
 
     private func updateDrawingPreviewLayer() {
         if drawingPreviewLayer == nil {
@@ -910,9 +934,6 @@ class SelectionView: NSView {
 
         let path = CGMutablePath()
         if currentDrawingTool == .arrow {
-            path.move(to: start)
-            path.addLine(to: end)
-
             let angle = atan2(end.y - start.y, end.x - start.x)
             let arrowHeadLength: CGFloat = 20.0
             let arrowHeadAngle: CGFloat = .pi / 6
@@ -924,10 +945,31 @@ class SelectionView: NSView {
                 x: end.x - arrowHeadLength * cos(angle - arrowHeadAngle),
                 y: end.y - arrowHeadLength * sin(angle - arrowHeadAngle)
             )
-            path.move(to: end)
-            path.addLine(to: arrowPoint1)
-            path.move(to: end)
-            path.addLine(to: arrowPoint2)
+
+            // Line stops at arrow base
+            let arrowBasePoint = CGPoint(
+                x: (arrowPoint1.x + arrowPoint2.x) / 2,
+                y: (arrowPoint1.y + arrowPoint2.y) / 2
+            )
+            path.move(to: start)
+            path.addLine(to: arrowBasePoint)
+
+            // Create/update filled arrowhead layer
+            if drawingPreviewHeadLayer == nil {
+                let headLayer = CAShapeLayer()
+                headLayer.fillColor = annotationColor
+                headLayer.strokeColor = nil
+                headLayer.actions = ["path": NSNull()]
+                layer?.addSublayer(headLayer)
+                drawingPreviewHeadLayer = headLayer
+            }
+
+            let headPath = CGMutablePath()
+            headPath.move(to: end)
+            headPath.addLine(to: arrowPoint1)
+            headPath.addLine(to: arrowPoint2)
+            headPath.closeSubpath()
+            drawingPreviewHeadLayer?.path = headPath
         } else {
             let rect = rectFromPoints(start, end)
             path.addRect(rect)
@@ -939,6 +981,8 @@ class SelectionView: NSView {
     private func clearDrawingPreviewLayer() {
         drawingPreviewLayer?.removeFromSuperlayer()
         drawingPreviewLayer = nil
+        drawingPreviewHeadLayer?.removeFromSuperlayer()
+        drawingPreviewHeadLayer = nil
     }
 
     private func syncAnnotationLayers() {
@@ -947,6 +991,9 @@ class SelectionView: NSView {
             if !annotations.contains(where: { $0.id == id }) {
                 layer.removeFromSuperlayer()
                 annotationLayers.removeValue(forKey: id)
+                // Also remove arrowhead layer if exists
+                arrowHeadLayers[id]?.removeFromSuperlayer()
+                arrowHeadLayers.removeValue(forKey: id)
             }
         }
 
