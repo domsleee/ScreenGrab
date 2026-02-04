@@ -82,7 +82,7 @@ class SelectionView: NSView {
     var onSelectionComplete: ((CGRect, [any Annotation]) -> Void)?
     var onCancel: (() -> Void)?
 
-    private var currentMode: CaptureMode = .select {
+    private var currentMode: CaptureMode = .regionSelect {
         didSet {
             updateCursorForMode()
         }
@@ -384,13 +384,11 @@ class SelectionView: NSView {
 
     private func handleKeyEvent(_ event: NSEvent) {
         switch event.keyCode {
-        case 53: // ESC - return to select mode or cancel
-            if currentMode != .select {
-                currentMode = .select
-                needsDisplay = true
-            } else {
-                onCancel?()
-            }
+        case 53: // ESC - cancel
+            onCancel?()
+        case 1: // S - select mode
+            currentMode = .select
+            needsDisplay = true
         case 48: // Tab - region select mode
             currentMode = .regionSelect
             needsDisplay = true
@@ -401,8 +399,12 @@ class SelectionView: NSView {
             currentMode = .arrow
             needsDisplay = true
         case 51: // Delete
-            if !annotations.isEmpty {
-                annotations.removeLast()
+            if let selected = selectedAnnotation {
+                annotations.removeAll { $0.id == selected.id }
+                selectedAnnotation = nil
+                selectionHandleLayer?.removeFromSuperlayer()
+                selectionHandleLayer = nil
+                syncAnnotationLayers()
                 needsDisplay = true
             }
         default:
@@ -415,6 +417,11 @@ class SelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         hideCoordDisplay()
+
+        // Check toolbar clicks first
+        if handleToolbarClick(at: point) {
+            return
+        }
 
         switch currentMode {
         case .select:
@@ -641,7 +648,7 @@ class SelectionView: NSView {
         // Annotations are now drawn via CAShapeLayers for smooth dragging
         // Selection handles are also drawn via CAShapeLayers
 
-        drawInstructions()
+        drawToolbar()
     }
 
     private func drawSizeLabel(for rect: NSRect) {
@@ -668,74 +675,104 @@ class SelectionView: NSView {
         )
     }
 
-    private func drawInstructions() {
-        let modeText: String
-        let modeColor: NSColor
-        switch currentMode {
-        case .rectangle:
-            modeText = "🔴 RECTANGLE MODE"
-            modeColor = NSColor.systemRed
-        case .arrow:
-            modeText = "➡️ ARROW MODE"
-            modeColor = NSColor.systemOrange
-        case .select:
-            modeText = "🔲 SELECT MODE"
-            modeColor = NSColor.white
-        case .regionSelect:
-            modeText = "✂️ REGION SELECT"
-            modeColor = NSColor.systemBlue
+    // MARK: - Toolbar
+
+    private struct ToolbarButton {
+        let mode: CaptureMode
+        let icon: String  // SF Symbol name
+        let shortcut: String
+        let label: String
+    }
+
+    private let toolbarButtons: [ToolbarButton] = [
+        ToolbarButton(mode: .regionSelect, icon: "crop", shortcut: "Tab", label: "Region"),
+        ToolbarButton(mode: .select, icon: "cursorarrow", shortcut: "S", label: "Select"),
+        ToolbarButton(mode: .rectangle, icon: "rectangle", shortcut: "R", label: "Rect"),
+        ToolbarButton(mode: .arrow, icon: "arrow.up.right", shortcut: "A", label: "Arrow"),
+    ]
+
+    private let toolbarButtonSize: CGFloat = 40
+    private let toolbarSpacing: CGFloat = 4
+    private let toolbarPadding: CGFloat = 6
+
+    private func toolbarRect() -> NSRect {
+        let count = CGFloat(toolbarButtons.count)
+        let totalWidth = count * toolbarButtonSize + (count - 1) * toolbarSpacing + toolbarPadding * 2
+        let totalHeight = toolbarButtonSize + toolbarPadding * 2
+        return NSRect(
+            x: bounds.midX - totalWidth / 2,
+            y: bounds.height - 60 - totalHeight,
+            width: totalWidth,
+            height: totalHeight
+        )
+    }
+
+    private func rectForToolbarButton(at index: Int) -> NSRect {
+        let toolbar = toolbarRect()
+        let x = toolbar.minX + toolbarPadding + CGFloat(index) * (toolbarButtonSize + toolbarSpacing)
+        let y = toolbar.minY + toolbarPadding
+        return NSRect(x: x, y: y, width: toolbarButtonSize, height: toolbarButtonSize)
+    }
+
+    private func handleToolbarClick(at point: NSPoint) -> Bool {
+        for (index, button) in toolbarButtons.enumerated() {
+            let btnRect = rectForToolbarButton(at: index)
+            if btnRect.contains(point) {
+                currentMode = button.mode
+                needsDisplay = true
+                return true
+            }
         }
-        let modeAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 16, weight: .bold),
-            .foregroundColor: modeColor
-        ]
-        let modeSize = modeText.size(withAttributes: modeAttrs)
-        let modePoint = NSPoint(
-            x: bounds.midX - modeSize.width / 2,
-            y: bounds.height - 120
-        )
-        let modeBgRect = NSRect(
-            x: modePoint.x - 12,
-            y: modePoint.y - 6,
-            width: modeSize.width + 24,
-            height: modeSize.height + 12
-        )
-        NSColor.black.withAlphaComponent(0.8).setFill()
-        NSBezierPath(roundedRect: modeBgRect, xRadius: 8, yRadius: 8).fill()
-        modeText.draw(at: modePoint, withAttributes: modeAttrs)
+        return false
+    }
 
-        var text: String
-        switch currentMode {
-        case .rectangle:
-            text = "Drag to draw rectangle • ESC: Back to select"
-        case .arrow:
-            text = "Drag to draw arrow • ESC: Back to select"
-        case .select:
-            text = "Tab: Region select • R: Rectangle • A: Arrow • ESC: Cancel"
-        case .regionSelect:
-            text = "Drag to select & capture • ESC: Back to select"
+    private func drawToolbar() {
+        let toolbar = toolbarRect()
+
+        // Draw toolbar background
+        NSColor.black.withAlphaComponent(0.85).setFill()
+        NSBezierPath(roundedRect: toolbar, xRadius: 10, yRadius: 10).fill()
+
+        for (index, button) in toolbarButtons.enumerated() {
+            let btnRect = rectForToolbarButton(at: index)
+            let isActive = currentMode == button.mode
+
+            // Draw button background
+            if isActive {
+                NSColor.white.withAlphaComponent(0.25).setFill()
+            } else {
+                NSColor.white.withAlphaComponent(0.05).setFill()
+            }
+            NSBezierPath(roundedRect: btnRect, xRadius: 8, yRadius: 8).fill()
+
+            // Draw SF Symbol icon
+            let iconConfig = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            if let icon = NSImage(systemSymbolName: button.icon, accessibilityDescription: button.label)?
+                .withSymbolConfiguration(iconConfig) {
+                let iconSize = icon.size
+                let iconX = btnRect.midX - iconSize.width / 2
+                let iconY = btnRect.midY - iconSize.height / 2 + 5
+                let tintColor: NSColor = isActive ? .white : .white.withAlphaComponent(0.6)
+                let tinted = icon.copy() as! NSImage
+                tinted.lockFocus()
+                tintColor.set()
+                NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+                tinted.unlockFocus()
+                tinted.draw(in: NSRect(x: iconX, y: iconY, width: iconSize.width, height: iconSize.height))
+            }
+
+            // Draw shortcut label below icon
+            let shortcutAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                .foregroundColor: isActive ? NSColor.white : NSColor.white.withAlphaComponent(0.4)
+            ]
+            let shortcutSize = button.shortcut.size(withAttributes: shortcutAttrs)
+            let shortcutPoint = NSPoint(
+                x: btnRect.midX - shortcutSize.width / 2,
+                y: btnRect.minY + 3
+            )
+            button.shortcut.draw(at: shortcutPoint, withAttributes: shortcutAttrs)
         }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 14, weight: .medium),
-            .foregroundColor: NSColor.white
-        ]
-
-        let textSize = text.size(withAttributes: attributes)
-        let point = NSPoint(
-            x: bounds.midX - textSize.width / 2,
-            y: bounds.height - 80
-        )
-
-        let bgRect = NSRect(
-            x: point.x - 10,
-            y: point.y - 5,
-            width: textSize.width + 20,
-            height: textSize.height + 10
-        )
-        NSColor.black.withAlphaComponent(0.7).setFill()
-        NSBezierPath(roundedRect: bgRect, xRadius: 6, yRadius: 6).fill()
-
-        text.draw(at: point, withAttributes: attributes)
     }
 
     private func rectFromPoints(_ p1: NSPoint, _ p2: NSPoint) -> NSRect {
