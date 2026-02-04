@@ -75,9 +75,49 @@ class ScreenCaptureManager {
             // Copy to clipboard
             ClipboardManager.copy(image: nsImage)
             logInfo("Copied to clipboard")
+
+            // Save to file
+            saveImageToFile(nsImage)
         }
 
         cleanupOverlays()
+    }
+
+    private func saveImageToFile(_ image: NSImage) {
+        let savePath = AppSettings.shared.savePath
+        let fileManager = FileManager.default
+
+        // Create directory if needed
+        if !fileManager.fileExists(atPath: savePath) {
+            do {
+                try fileManager.createDirectory(atPath: savePath, withIntermediateDirectories: true)
+            } catch {
+                logError("Failed to create save directory: \(error)")
+                return
+            }
+        }
+
+        // Generate filename with timestamp
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestamp = formatter.string(from: Date())
+        let filename = "ScreenGrab_\(timestamp).png"
+        let filePath = (savePath as NSString).appendingPathComponent(filename)
+
+        // Write PNG data
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            logError("Failed to create PNG data")
+            return
+        }
+
+        do {
+            try pngData.write(to: URL(fileURLWithPath: filePath))
+            logInfo("Saved screenshot to \(filePath)")
+        } catch {
+            logError("Failed to save screenshot: \(error)")
+        }
     }
 
     private func cleanupOverlays() {
@@ -132,6 +172,16 @@ class ScreenCaptureManager {
                         strokeWidth: arrowAnnotation.strokeWidth
                     )
                     translatedArrow.draw(in: context)
+                } else if let textAnnotation = annotation as? TextAnnotation {
+                    let translatedPosition = CGPoint(
+                        x: textAnnotation.position.x - selectionRect.origin.x,
+                        y: textAnnotation.position.y - selectionRect.origin.y
+                    )
+                    let attrs = textAnnotation.textAttributes()
+                    (textAnnotation.text as NSString).draw(
+                        at: translatedPosition,
+                        withAttributes: attrs
+                    )
                 }
             }
         }

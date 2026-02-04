@@ -76,6 +76,7 @@ enum CaptureMode {
     case regionSelect  // Draw screenshot capture area
     case rectangle     // Draw rectangle annotation
     case arrow         // Draw arrow annotation
+    case text          // Place text annotation
 }
 
 class SelectionView: NSView {
@@ -84,6 +85,10 @@ class SelectionView: NSView {
 
     private var currentMode: CaptureMode = .regionSelect {
         didSet {
+            // Commit any in-progress text annotation when switching modes
+            if oldValue == .text && currentMode != .text {
+                commitTextAnnotation()
+            }
             updateCursorForMode()
         }
     }
@@ -106,12 +111,25 @@ class SelectionView: NSView {
     private var dragStartArrowStart: CGPoint?
     private var dragStartArrowEnd: CGPoint?
 
+    // Text editing state
+    private var editingTextAnnotation: TextAnnotation?
+    private var editingTextLayer: CATextLayer?
+
+    // Hover-to-select in drawing modes
+    private var hoveredAnnotation: (any Annotation)?
+    private var hoverHighlightLayer: CAShapeLayer?
+
     // CALayer-based annotation rendering for smooth dragging
-    private var annotationLayers: [UUID: CAShapeLayer] = [:]
+    private var annotationLayers: [UUID: CALayer] = [:]
     private var selectionHandleLayer: CAShapeLayer?
 
-    private let annotationColor = NSColor.red.cgColor
+    private var annotationColor = NSColor.red.cgColor
     private let strokeWidth: CGFloat = 3.0
+
+    private let colorPalette: [NSColor] = [
+        .red, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple,
+        .white, .lightGray, .gray, .darkGray, .black, .systemPink,
+    ]
 
     private var keyMonitor: Any?
     private var localKeyMonitor: Any?
@@ -134,6 +152,10 @@ class SelectionView: NSView {
     }
 
     private func setupView() {
+        // Load saved color
+        if let rgba = AppSettings.shared.annotationColorRGBA, rgba.count == 4 {
+            annotationColor = CGColor(red: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        }
         wantsLayer = true
         layer?.drawsAsynchronously = true
         // Disable implicit animations for immediate updates
@@ -153,12 +175,14 @@ class SelectionView: NSView {
     }
 
     private func setupDisplayLink() {
-        // Poll mouse position at 120Hz for smooth coordinate updates
+        // Poll mouse position at 120Hz for smooth coordinate updates and hover detection
         coordTimer = Timer(timeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
             guard let self = self, let window = self.window else { return }
             let screenPos = NSEvent.mouseLocation
             let windowPos = window.convertPoint(fromScreen: screenPos)
             let viewPos = self.convert(windowPos, from: nil)
+            self.currentMousePosition = viewPos
+            self.updateHoverState(at: viewPos)
             self.updateCoordDisplay(at: viewPos)
         }
         if let timer = coordTimer {
@@ -264,13 +288,72 @@ class SelectionView: NSView {
     }
 
     private func updateCursorWithCoords(_ point: NSPoint) {
+        // Guard against calling from contexts where font operations may crash
+        guard let _ = window else { return }
         buildCrosshairCursor(at: point)
         crosshairCursor?.set()
     }
 
+    /// Returns the full visual bounding rect for an annotation, including arrowhead extent.
+    private func visualBounds(for annotation: any Annotation) -> CGRect {
+        if let arrow = annotation as? ArrowAnnotation {
+            let angle = atan2(arrow.endPoint.y - arrow.startPoint.y, arrow.endPoint.x - arrow.startPoint.x)
+            let arrowPoint1 = CGPoint(
+                x: arrow.endPoint.x - arrow.arrowHeadLength * cos(angle + arrow.arrowHeadAngle),
+                y: arrow.endPoint.y - arrow.arrowHeadLength * sin(angle + arrow.arrowHeadAngle)
+            )
+            let arrowPoint2 = CGPoint(
+                x: arrow.endPoint.x - arrow.arrowHeadLength * cos(angle - arrow.arrowHeadAngle),
+                y: arrow.endPoint.y - arrow.arrowHeadLength * sin(angle - arrow.arrowHeadAngle)
+            )
+            let allX = [arrow.startPoint.x, arrow.endPoint.x, arrowPoint1.x, arrowPoint2.x]
+            let allY = [arrow.startPoint.y, arrow.endPoint.y, arrowPoint1.y, arrowPoint2.y]
+            return CGRect(
+                x: allX.min()!, y: allY.min()!,
+                width: allX.max()! - allX.min()!, height: allY.max()! - allY.min()!
+            )
+        }
+        return annotation.bounds
+    }
+
+    private func updateHoverState(at point: NSPoint) {
+        // Only check hover in drawing modes, not while actively drawing/dragging
+        guard currentMode == .rectangle || currentMode == .arrow || currentMode == .text else {
+            if hoveredAnnotation != nil {
+                hoveredAnnotation = nil
+                updateHoverHighlightLayer()
+            }
+            return
+        }
+        guard !isDraggingAnnotation && !isDrawingAnnotation else { return }
+
+        // Use bounding rect for hover detection — much broader than hitTest line proximity
+        var foundAnnotation: (any Annotation)?
+        for annotation in annotations.reversed() {
+            let rect = visualBounds(for: annotation).insetBy(dx: -4, dy: -4)
+            if rect.contains(point) {
+                foundAnnotation = annotation
+                break
+            }
+        }
+
+        if let found = foundAnnotation {
+            if hoveredAnnotation?.id != found.id {
+                hoveredAnnotation = found
+                updateHoverHighlightLayer()
+            }
+            NSCursor.arrow.set()
+        } else {
+            if hoveredAnnotation != nil {
+                hoveredAnnotation = nil
+                updateHoverHighlightLayer()
+            }
+        }
+    }
+
     private func updateCoordDisplay(at point: NSPoint) {
-        // Only show coords cursor in non-select modes
-        if currentMode != .select {
+        // Only show coords cursor in non-select modes, and not when hovering over an annotation
+        if currentMode != .select && hoveredAnnotation == nil {
             updateCursorWithCoords(point)
         }
     }
@@ -383,6 +466,12 @@ class SelectionView: NSView {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
+        // If we're editing text, handle text input instead of shortcuts
+        if editingTextAnnotation != nil {
+            handleTextKeyEvent(event)
+            return
+        }
+
         switch event.keyCode {
         case 53: // ESC - cancel
             onCancel?()
@@ -398,6 +487,9 @@ class SelectionView: NSView {
         case 0: // A - arrow annotation mode
             currentMode = .arrow
             needsDisplay = true
+        case 17: // T - text annotation mode
+            currentMode = .text
+            needsDisplay = true
         case 51: // Delete
             if let selected = selectedAnnotation {
                 annotations.removeAll { $0.id == selected.id }
@@ -412,6 +504,122 @@ class SelectionView: NSView {
         }
     }
 
+    private func handleTextKeyEvent(_ event: NSEvent) {
+        guard let annotation = editingTextAnnotation else { return }
+
+        switch event.keyCode {
+        case 53: // ESC - cancel current text (discard)
+            editingTextLayer?.removeFromSuperlayer()
+            editingTextLayer = nil
+            editingTextAnnotation = nil
+        case 36, 76: // Return / Enter - commit text
+            commitTextAnnotation()
+        case 51: // Delete/Backspace
+            if !annotation.text.isEmpty {
+                annotation.text = String(annotation.text.dropLast())
+                updateEditingTextLayer()
+            }
+        default:
+            // Append typed characters
+            if let chars = event.characters, !chars.isEmpty {
+                // Filter out control characters — keep printable characters only
+                let filtered = chars.filter { char in
+                    if char.isNewline { return false }
+                    if let ascii = char.asciiValue { return ascii >= 32 }
+                    return true // non-ASCII (emoji, unicode) is fine
+                }
+                if !filtered.isEmpty {
+                    annotation.text += filtered
+                    updateEditingTextLayer()
+                }
+            }
+        }
+    }
+
+    private func beginEditingTextAnnotation(_ annotation: TextAnnotation) {
+        // Remove from committed annotations and its layer
+        annotations.removeAll { $0.id == annotation.id }
+        annotationLayers[annotation.id]?.removeFromSuperlayer()
+        annotationLayers.removeValue(forKey: annotation.id)
+
+        // Clear selection state
+        selectedAnnotation = nil
+        selectionHandleLayer?.removeFromSuperlayer()
+        selectionHandleLayer = nil
+
+        // Enter text editing mode
+        editingTextAnnotation = annotation
+        let textLayer = createEditingTextLayer(for: annotation)
+        // Show current text with cursor
+        let displayText = annotation.text + "|"
+        let attrs = annotation.textAttributes()
+        textLayer.string = NSAttributedString(string: displayText, attributes: attrs)
+        let size = (displayText as NSString).size(withAttributes: attrs)
+        textLayer.bounds = CGRect(x: 0, y: 0, width: size.width + 4, height: size.height + 4)
+        textLayer.position = CGPoint(x: annotation.position.x + size.width / 2 + 2,
+                                     y: annotation.position.y + size.height / 2 + 2)
+        layer?.addSublayer(textLayer)
+        editingTextLayer = textLayer
+
+        currentMode = .text
+        needsDisplay = true
+    }
+
+    private func commitTextAnnotation() {
+        guard let annotation = editingTextAnnotation else { return }
+
+        // Remove the editing layer
+        editingTextLayer?.removeFromSuperlayer()
+        editingTextLayer = nil
+        editingTextAnnotation = nil
+
+        // Only add if text is non-empty
+        if !annotation.text.isEmpty {
+            annotations.append(annotation)
+            syncAnnotationLayers()
+        }
+
+        needsDisplay = true
+    }
+
+    private func updateEditingTextLayer() {
+        guard let annotation = editingTextAnnotation, let textLayer = editingTextLayer else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let displayText = annotation.text.isEmpty ? "|" : annotation.text + "|"
+        let attrs = annotation.textAttributes()
+        textLayer.string = NSAttributedString(string: displayText, attributes: attrs)
+
+        let size = (displayText as NSString).size(withAttributes: attrs)
+        textLayer.bounds = CGRect(x: 0, y: 0, width: size.width + 4, height: size.height + 4)
+        textLayer.position = CGPoint(x: annotation.position.x + size.width / 2 + 2,
+                                     y: annotation.position.y + size.height / 2 + 2)
+
+        CATransaction.commit()
+    }
+
+    private func createEditingTextLayer(for annotation: TextAnnotation) -> CATextLayer {
+        let textLayer = CATextLayer()
+        textLayer.alignmentMode = .left
+        textLayer.contentsScale = window?.screen?.backingScaleFactor ?? 2.0
+        textLayer.isWrapped = false
+        textLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()]
+
+        // Use attributed string for reliable rendering
+        let displayText = "|"
+        let attrs = annotation.textAttributes()
+        textLayer.string = NSAttributedString(string: displayText, attributes: attrs)
+
+        let size = (displayText as NSString).size(withAttributes: attrs)
+        textLayer.bounds = CGRect(x: 0, y: 0, width: size.width + 4, height: size.height + 4)
+        textLayer.position = CGPoint(x: annotation.position.x + size.width / 2 + 2,
+                                     y: annotation.position.y + size.height / 2 + 2)
+
+        return textLayer
+    }
+
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
@@ -423,8 +631,23 @@ class SelectionView: NSView {
             return
         }
 
+        // Clear hover state on any mouse down
+        hoveredAnnotation = nil
+        updateHoverHighlightLayer()
+
         switch currentMode {
         case .select:
+            // Double-click on a text annotation to edit it
+            if event.clickCount == 2 {
+                for annotation in annotations.reversed() {
+                    if let textAnnotation = annotation as? TextAnnotation,
+                       textAnnotation.contains(point: point) {
+                        beginEditingTextAnnotation(textAnnotation)
+                        return
+                    }
+                }
+            }
+
             // Check if clicking on an annotation
             for annotation in annotations.reversed() {
                 if let handle = annotation.hitTest(point: point) {
@@ -456,10 +679,78 @@ class SelectionView: NSView {
             selectionEnd = point
             isSelecting = true
         case .rectangle, .arrow:
+            // Check if clicking on an existing annotation (use bounding rect, not line proximity)
+            for annotation in annotations.reversed() {
+                let rect = visualBounds(for: annotation).insetBy(dx: -4, dy: -4)
+                if rect.contains(point) {
+                    selectedAnnotation = annotation
+                    // Use precise hitTest for endpoint/corner handles, fall back to .body
+                    activeHandle = annotation.hitTest(point: point) ?? .body
+                    isDraggingAnnotation = true
+                    dragStartPoint = point
+                    dragStartBounds = annotation.bounds
+
+                    if let arrow = annotation as? ArrowAnnotation {
+                        dragStartArrowStart = arrow.startPoint
+                        dragStartArrowEnd = arrow.endPoint
+                    }
+
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    updateSelectionHandlesLayer()
+                    CATransaction.commit()
+                    needsDisplay = true
+                    return
+                }
+            }
+
+            // No annotation hit — start drawing new one
             isDrawingAnnotation = true
             currentDrawingTool = currentMode
             annotationStart = point
             annotationEnd = point
+        case .text:
+            // If currently editing, commit first
+            if editingTextAnnotation != nil {
+                commitTextAnnotation()
+            }
+
+            // Check if clicking on an existing annotation (use bounding rect)
+            for annotation in annotations.reversed() {
+                let rect = visualBounds(for: annotation).insetBy(dx: -4, dy: -4)
+                if rect.contains(point) {
+                    // Double-click on text to edit it
+                    if event.clickCount == 2, let textAnnotation = annotation as? TextAnnotation {
+                        beginEditingTextAnnotation(textAnnotation)
+                        return
+                    }
+                    selectedAnnotation = annotation
+                    activeHandle = annotation.hitTest(point: point) ?? .body
+                    isDraggingAnnotation = true
+                    dragStartPoint = point
+                    dragStartBounds = annotation.bounds
+
+                    if let arrow = annotation as? ArrowAnnotation {
+                        dragStartArrowStart = arrow.startPoint
+                        dragStartArrowEnd = arrow.endPoint
+                    }
+
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    updateSelectionHandlesLayer()
+                    CATransaction.commit()
+                    needsDisplay = true
+                    return
+                }
+            }
+
+            // No annotation hit — start a new text annotation at click position
+            let annotation = TextAnnotation(position: point, color: annotationColor)
+            editingTextAnnotation = annotation
+
+            let textLayer = createEditingTextLayer(for: annotation)
+            layer?.addSublayer(textLayer)
+            editingTextLayer = textLayer
         }
         needsDisplay = true
     }
@@ -586,7 +877,6 @@ class SelectionView: NSView {
                 }
             }
 
-            currentMode = .select
             annotationStart = nil
             annotationEnd = nil
             needsDisplay = true
@@ -611,10 +901,10 @@ class SelectionView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
-        // Coord display updated by 120Hz timer
+        // Hover detection and coord display handled by 120Hz timer
         if currentMode == .select {
             NSCursor.arrow.set()
-        } else {
+        } else if hoveredAnnotation == nil {
             crosshairCursor?.set()
         }
     }
@@ -689,15 +979,21 @@ class SelectionView: NSView {
         ToolbarButton(mode: .select, icon: "cursorarrow", shortcut: "S", label: "Select"),
         ToolbarButton(mode: .rectangle, icon: "rectangle", shortcut: "R", label: "Rect"),
         ToolbarButton(mode: .arrow, icon: "arrow.up.right", shortcut: "A", label: "Arrow"),
+        ToolbarButton(mode: .text, icon: "textformat", shortcut: "T", label: "Text"),
     ]
 
     private let toolbarButtonSize: CGFloat = 40
     private let toolbarSpacing: CGFloat = 4
     private let toolbarPadding: CGFloat = 6
 
+    private let colorDividerGap: CGFloat = 8
+    private var isColorPopoverVisible = false
+
     private func toolbarRect() -> NSRect {
         let count = CGFloat(toolbarButtons.count)
-        let totalWidth = count * toolbarButtonSize + (count - 1) * toolbarSpacing + toolbarPadding * 2
+        let buttonsWidth = count * toolbarButtonSize + (count - 1) * toolbarSpacing
+        // One color button after divider
+        let totalWidth = buttonsWidth + colorDividerGap + toolbarButtonSize + toolbarPadding * 2
         let totalHeight = toolbarButtonSize + toolbarPadding * 2
         return NSRect(
             x: bounds.midX - totalWidth / 2,
@@ -714,7 +1010,120 @@ class SelectionView: NSView {
         return NSRect(x: x, y: y, width: toolbarButtonSize, height: toolbarButtonSize)
     }
 
+    private func colorButtonRect() -> NSRect {
+        let toolbar = toolbarRect()
+        let count = CGFloat(toolbarButtons.count)
+        let x = toolbar.minX + toolbarPadding + count * (toolbarButtonSize + toolbarSpacing) - toolbarSpacing + colorDividerGap
+        let y = toolbar.minY + toolbarPadding
+        return NSRect(x: x, y: y, width: toolbarButtonSize, height: toolbarButtonSize)
+    }
+
+    // Color popover layout
+    private let popoverSwatchSize: CGFloat = 22
+    private let popoverSwatchSpacing: CGFloat = 6
+    private let popoverPadding: CGFloat = 10
+    private let popoverColumns = 6
+
+    private func colorPopoverRect() -> NSRect {
+        let btnRect = colorButtonRect()
+        let rows = ceil(CGFloat(colorPalette.count) / CGFloat(popoverColumns))
+        let gridWidth = CGFloat(popoverColumns) * popoverSwatchSize + CGFloat(popoverColumns - 1) * popoverSwatchSpacing
+        let gridHeight = rows * popoverSwatchSize + (rows - 1) * popoverSwatchSpacing
+        let customRowHeight: CGFloat = 28
+        let totalWidth = gridWidth + popoverPadding * 2
+        let totalHeight = gridHeight + popoverPadding * 2 + popoverSwatchSpacing + customRowHeight
+        // Right-align to color button, position just below toolbar
+        let x = btnRect.maxX - totalWidth
+        let toolbar = toolbarRect()
+        let y = toolbar.minY - totalHeight - 4
+        return NSRect(x: x, y: y, width: totalWidth, height: totalHeight)
+    }
+
+    private func popoverSwatchRect(at index: Int) -> NSRect {
+        let popover = colorPopoverRect()
+        let col = index % popoverColumns
+        let row = index / popoverColumns
+        let x = popover.minX + popoverPadding + CGFloat(col) * (popoverSwatchSize + popoverSwatchSpacing)
+        // Row 0 at top of popover
+        let topY = popover.maxY - popoverPadding - popoverSwatchSize
+        let y = topY - CGFloat(row) * (popoverSwatchSize + popoverSwatchSpacing)
+        return NSRect(x: x, y: y, width: popoverSwatchSize, height: popoverSwatchSize)
+    }
+
+    private func popoverCustomButtonRect() -> NSRect {
+        let popover = colorPopoverRect()
+        return NSRect(
+            x: popover.minX + popoverPadding,
+            y: popover.minY + popoverPadding,
+            width: popover.width - popoverPadding * 2,
+            height: 24
+        )
+    }
+
+    private func applyColor(_ color: CGColor) {
+        annotationColor = color
+        // Persist
+        if let components = color.components, color.numberOfComponents == 4 {
+            AppSettings.shared.annotationColorRGBA = components
+        } else if let converted = color.converted(to: CGColorSpaceCreateDeviceRGB(), intent: .defaultIntent, options: nil),
+                  let components = converted.components, converted.numberOfComponents == 4 {
+            AppSettings.shared.annotationColorRGBA = components
+        }
+        if let selected = selectedAnnotation {
+            selected.color = color
+            updateAnnotationLayer(for: selected)
+            if let arrow = selected as? ArrowAnnotation {
+                arrowHeadLayers[arrow.id]?.fillColor = color
+            }
+        }
+        if let editing = editingTextAnnotation {
+            editing.color = color
+            updateEditingTextLayer()
+        }
+        needsDisplay = true
+    }
+
+    @objc private func colorPanelColorChanged(_ sender: NSColorPanel) {
+        applyColor(sender.color.cgColor)
+    }
+
+    private func openSystemColorPicker() {
+        let panel = NSColorPanel.shared
+        panel.setTarget(self)
+        panel.setAction(#selector(colorPanelColorChanged(_:)))
+        panel.color = NSColor(cgColor: annotationColor) ?? .red
+        panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 1)
+        panel.orderFront(nil)
+    }
+
     private func handleToolbarClick(at point: NSPoint) -> Bool {
+        // If popover is open, handle clicks inside it first
+        if isColorPopoverVisible {
+            let popover = colorPopoverRect()
+            if popover.contains(point) {
+                // Check swatch clicks
+                for (index, color) in colorPalette.enumerated() {
+                    if popoverSwatchRect(at: index).contains(point) {
+                        applyColor(color.cgColor)
+                        isColorPopoverVisible = false
+                        return true
+                    }
+                }
+                // Check custom button
+                if popoverCustomButtonRect().contains(point) {
+                    isColorPopoverVisible = false
+                    openSystemColorPicker()
+                    needsDisplay = true
+                    return true
+                }
+                return true // absorb click inside popover
+            }
+            // Click outside popover dismisses it
+            isColorPopoverVisible = false
+            needsDisplay = true
+            // Fall through to check toolbar buttons
+        }
+
         for (index, button) in toolbarButtons.enumerated() {
             let btnRect = rectForToolbarButton(at: index)
             if btnRect.contains(point) {
@@ -723,6 +1132,14 @@ class SelectionView: NSView {
                 return true
             }
         }
+
+        // Color button toggles popover
+        if colorButtonRect().contains(point) {
+            isColorPopoverVisible = !isColorPopoverVisible
+            needsDisplay = true
+            return true
+        }
+
         return false
     }
 
@@ -773,6 +1190,87 @@ class SelectionView: NSView {
             )
             button.shortcut.draw(at: shortcutPoint, withAttributes: shortcutAttrs)
         }
+
+        // Draw color button (filled circle showing current color)
+        let colorBtn = colorButtonRect()
+        let circleInset: CGFloat = 8
+        let circleRect = colorBtn.insetBy(dx: circleInset, dy: circleInset)
+
+        // Button background
+        NSColor.white.withAlphaComponent(0.05).setFill()
+        NSBezierPath(roundedRect: colorBtn, xRadius: 8, yRadius: 8).fill()
+
+        // Color circle
+        (NSColor(cgColor: annotationColor) ?? .red).setFill()
+        NSBezierPath(ovalIn: circleRect).fill()
+
+        // Border on circle
+        NSColor.white.withAlphaComponent(0.4).setStroke()
+        let circleBorder = NSBezierPath(ovalIn: circleRect)
+        circleBorder.lineWidth = 1.5
+        circleBorder.stroke()
+
+        // Draw color popover if visible
+        if isColorPopoverVisible {
+            drawColorPopover()
+        }
+    }
+
+    private func drawColorPopover() {
+        let popover = colorPopoverRect()
+
+        // Shadow
+        let shadowRect = popover.insetBy(dx: -2, dy: -2).offsetBy(dx: 0, dy: -2)
+        NSColor.black.withAlphaComponent(0.3).setFill()
+        NSBezierPath(roundedRect: shadowRect, xRadius: 10, yRadius: 10).fill()
+
+        // Background
+        NSColor(white: 0.15, alpha: 0.95).setFill()
+        NSBezierPath(roundedRect: popover, xRadius: 8, yRadius: 8).fill()
+
+        // Border
+        NSColor.white.withAlphaComponent(0.1).setStroke()
+        let borderPath = NSBezierPath(roundedRect: popover, xRadius: 8, yRadius: 8)
+        borderPath.lineWidth = 0.5
+        borderPath.stroke()
+
+        // Draw swatches
+        for (index, color) in colorPalette.enumerated() {
+            let swatchRect = popoverSwatchRect(at: index)
+            let isActive = color.cgColor == annotationColor
+
+            // Selection indicator
+            if isActive {
+                NSColor.white.setFill()
+                NSBezierPath(roundedRect: swatchRect.insetBy(dx: -2, dy: -2), xRadius: 5, yRadius: 5).fill()
+            }
+
+            // Filled rounded square
+            color.setFill()
+            NSBezierPath(roundedRect: swatchRect, xRadius: 4, yRadius: 4).fill()
+
+            // Subtle border
+            NSColor.white.withAlphaComponent(0.15).setStroke()
+            let sBorder = NSBezierPath(roundedRect: swatchRect, xRadius: 4, yRadius: 4)
+            sBorder.lineWidth = 0.5
+            sBorder.stroke()
+        }
+
+        // "Custom..." button
+        let customBtn = popoverCustomButtonRect()
+        NSColor.white.withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: customBtn, xRadius: 4, yRadius: 4).fill()
+
+        let customAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.7)
+        ]
+        let customText = "Custom..."
+        let textSize = customText.size(withAttributes: customAttrs)
+        customText.draw(
+            at: NSPoint(x: customBtn.midX - textSize.width / 2, y: customBtn.minY + (customBtn.height - textSize.height) / 2),
+            withAttributes: customAttrs
+        )
     }
 
     private func rectFromPoints(_ p1: NSPoint, _ p2: NSPoint) -> NSRect {
@@ -836,7 +1334,11 @@ class SelectionView: NSView {
 
     private var arrowHeadLayers: [UUID: CAShapeLayer] = [:]
 
-    private func createAnnotationLayer(for annotation: any Annotation) -> CAShapeLayer {
+    private func createAnnotationLayer(for annotation: any Annotation) -> CALayer {
+        if let textAnnotation = annotation as? TextAnnotation {
+            return createTextAnnotationLayer(for: textAnnotation)
+        }
+
         let shapeLayer = CAShapeLayer()
         shapeLayer.strokeColor = annotation.color
         shapeLayer.lineWidth = annotation.strokeWidth
@@ -862,7 +1364,38 @@ class SelectionView: NSView {
         return shapeLayer
     }
 
-    private func updateLayerPath(_ shapeLayer: CAShapeLayer, for annotation: any Annotation) {
+    private func createTextAnnotationLayer(for annotation: TextAnnotation) -> CATextLayer {
+        let textLayer = CATextLayer()
+        textLayer.fontSize = annotation.fontSize
+        textLayer.font = NSFont.systemFont(ofSize: annotation.fontSize, weight: .bold)
+        textLayer.foregroundColor = annotation.color
+        textLayer.alignmentMode = .left
+        textLayer.contentsScale = window?.screen?.backingScaleFactor ?? 2.0
+        textLayer.isWrapped = false
+        textLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "string": NSNull()]
+
+        textLayer.string = annotation.text
+        let attrs = annotation.textAttributes()
+        let size = (annotation.text as NSString).size(withAttributes: attrs)
+        textLayer.bounds = CGRect(x: 0, y: 0, width: size.width + 4, height: size.height + 4)
+        textLayer.position = CGPoint(x: annotation.position.x + size.width / 2 + 2,
+                                     y: annotation.position.y + size.height / 2 + 2)
+
+        return textLayer
+    }
+
+    private func updateLayerPath(_ layerToUpdate: CALayer, for annotation: any Annotation) {
+        if let textAnnotation = annotation as? TextAnnotation, let textLayer = layerToUpdate as? CATextLayer {
+            textLayer.string = textAnnotation.text
+            let attrs = textAnnotation.textAttributes()
+            let size = (textAnnotation.text as NSString).size(withAttributes: attrs)
+            textLayer.bounds = CGRect(x: 0, y: 0, width: size.width + 4, height: size.height + 4)
+            textLayer.position = CGPoint(x: textAnnotation.position.x + size.width / 2 + 2,
+                                         y: textAnnotation.position.y + size.height / 2 + 2)
+            return
+        }
+
+        guard let shapeLayer = layerToUpdate as? CAShapeLayer else { return }
         let path = CGMutablePath()
 
         if let arrow = annotation as? ArrowAnnotation {
@@ -955,6 +1488,28 @@ class SelectionView: NSView {
         handleLayer.path = path
         layer?.addSublayer(handleLayer)
         selectionHandleLayer = handleLayer
+    }
+
+    private func updateHoverHighlightLayer() {
+        hoverHighlightLayer?.removeFromSuperlayer()
+        hoverHighlightLayer = nil
+
+        guard let hovered = hoveredAnnotation else { return }
+
+        let highlight = CAShapeLayer()
+        highlight.strokeColor = NSColor.white.withAlphaComponent(0.8).cgColor
+        highlight.fillColor = nil
+        highlight.lineWidth = 1.5
+        highlight.lineDashPattern = [4, 4]
+        highlight.actions = ["path": NSNull(), "position": NSNull()]
+
+        let path = CGMutablePath()
+        let rect = visualBounds(for: hovered).insetBy(dx: -4, dy: -4)
+        path.addRect(rect)
+
+        highlight.path = path
+        layer?.addSublayer(highlight)
+        hoverHighlightLayer = highlight
     }
 
     private var drawingPreviewLayer: CAShapeLayer?

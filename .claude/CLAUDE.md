@@ -1,0 +1,1 @@
+After making code changes, ALWAYS run `pkill -9 -f ScreenGrab; sleep 0.3; bash scripts/install.sh && open /Applications/ScreenGrab.app` to kill the old process, rebuild, and relaunch. Never skip this step.

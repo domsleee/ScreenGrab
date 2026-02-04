@@ -15,6 +15,7 @@ final class AppSettings {
         case strokeWidth
         case copyToClipboard
         case playSound
+        case savePath
     }
 
     private init() {
@@ -30,7 +31,8 @@ final class AppSettings {
             Key.annotationColor.rawValue: "red",
             Key.strokeWidth.rawValue: 3.0,
             Key.copyToClipboard.rawValue: true,
-            Key.playSound.rawValue: true
+            Key.playSound.rawValue: true,
+            Key.savePath.rawValue: ("~/Pictures/ScreenGrab" as NSString).expandingTildeInPath
         ])
     }
 
@@ -77,6 +79,11 @@ final class AppSettings {
         set { defaults.set(newValue, forKey: Key.annotationColor.rawValue) }
     }
 
+    var annotationColorRGBA: [CGFloat]? {
+        get { defaults.array(forKey: "annotationColorRGBA") as? [CGFloat] }
+        set { defaults.set(newValue, forKey: "annotationColorRGBA") }
+    }
+
     var strokeWidth: Double {
         get { defaults.double(forKey: Key.strokeWidth.rawValue) }
         set { defaults.set(newValue, forKey: Key.strokeWidth.rawValue) }
@@ -90,5 +97,10 @@ final class AppSettings {
     var playSound: Bool {
         get { defaults.bool(forKey: Key.playSound.rawValue) }
         set { defaults.set(newValue, forKey: Key.playSound.rawValue) }
+    }
+
+    var savePath: String {
+        get { defaults.string(forKey: Key.savePath.rawValue) ?? ("~/Pictures/ScreenGrab" as NSString).expandingTildeInPath }
+        set { defaults.set(newValue, forKey: Key.savePath.rawValue) }
     }
 }
