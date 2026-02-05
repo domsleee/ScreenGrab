@@ -89,9 +89,14 @@ class SelectionView: NSView {
             if oldValue == .text && currentMode != .text {
                 commitTextAnnotation()
             }
+            // Track the last non-regionSelect mode for Tab toggling
+            if oldValue != .regionSelect {
+                modeBeforeRegionSelect = oldValue
+            }
             updateCursorForMode()
         }
     }
+    private var modeBeforeRegionSelect: CaptureMode = .select
     private var selectionStart: NSPoint?
     private var selectionEnd: NSPoint?
     private var isSelecting = false
@@ -118,6 +123,7 @@ class SelectionView: NSView {
     // Hover-to-select in drawing modes
     private var hoveredAnnotation: (any Annotation)?
     private var hoverHighlightLayer: CAShapeLayer?
+    private var isHoveringSelectedHandle = false
 
     // CALayer-based annotation rendering for smooth dragging
     private var annotationLayers: [UUID: CALayer] = [:]
@@ -277,20 +283,35 @@ class SelectionView: NSView {
         buildCrosshairCursor(at: NSPoint(x: 0, y: 0))
     }
 
+    // Cache font and character metrics to avoid CoreText crashes from timer callbacks.
+    // sizeWithAttributes can crash when called from timer callbacks due to CoreText
+    // internal state issues (nil font in dictionary). Since the font is monospaced,
+    // we compute text sizes arithmetically from cached metrics.
+    private static let crosshairFont: NSFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+    private static let crosshairCharSize: NSSize = {
+        let font = crosshairFont
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        return ("0" as NSString).size(withAttributes: attrs)
+    }()
+
     private func buildCrosshairCursor(at point: NSPoint) {
         let crosshairSize: CGFloat = 33
         let center = crosshairSize / 2
         let armLength: CGFloat = 14
         let gap: CGFloat = 3
 
-        // Coord text
+        // Coord text — compute size from cached monospaced char metrics
         let coordText = "\(Int(point.x)), \(Int(point.y))"
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        let font = SelectionView.crosshairFont
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.white
         ]
-        let textSize = (coordText as NSString).size(withAttributes: attrs)
+        let charMetrics = SelectionView.crosshairCharSize
+        let textSize = NSSize(
+            width: charMetrics.width * CGFloat(coordText.count),
+            height: charMetrics.height
+        )
 
         // Text positioned to bottom-right of crosshair
         let textPadding: CGFloat = 4
@@ -382,6 +403,14 @@ class SelectionView: NSView {
     private func updateHoverState(at point: NSPoint) {
         guard !isDraggingAnnotation && !isDrawingAnnotation else { return }
 
+        isHoveringSelectedHandle = false
+
+        // Text editing always gets iBeam
+        if editingTextAnnotation != nil {
+            NSCursor.iBeam.set()
+            return
+        }
+
         // Select mode: show handle-aware cursors and hover highlights
         if currentMode == .select {
             // Check selected annotation handles first
@@ -391,6 +420,7 @@ class SelectionView: NSView {
                     hoveredAnnotation = nil
                     updateHoverHighlightLayer()
                 }
+                isHoveringSelectedHandle = true
                 cursorForHandle(handle).set()
                 return
             }
@@ -438,6 +468,17 @@ class SelectionView: NSView {
             return
         }
 
+        // Check selected annotation's resize handles first (visible after grab-and-release)
+        if let selected = selectedAnnotation, let handle = selected.hitTest(point: point) {
+            if hoveredAnnotation != nil {
+                hoveredAnnotation = nil
+                updateHoverHighlightLayer()
+            }
+            isHoveringSelectedHandle = true
+            cursorForHandle(handle).set()
+            return
+        }
+
         // Use bounding rect for hover detection — much broader than hitTest line proximity
         var foundAnnotation: (any Annotation)?
         for annotation in annotations.reversed() {
@@ -453,7 +494,7 @@ class SelectionView: NSView {
                 hoveredAnnotation = found
                 updateHoverHighlightLayer()
             }
-            NSCursor.arrow.set()
+            NSCursor.openHand.set()
         } else {
             if hoveredAnnotation != nil {
                 hoveredAnnotation = nil
@@ -468,6 +509,8 @@ class SelectionView: NSView {
             NSCursor.iBeam.set()
             return
         }
+        // Don't override drag/draw/handle-hover cursors
+        if isDraggingAnnotation || isDrawingAnnotation || isHoveringSelectedHandle { return }
         // Only show coords cursor in non-select modes, and not when hovering over an annotation
         if currentMode != .select && hoveredAnnotation == nil {
             updateCursorWithCoords(point)
@@ -536,40 +579,38 @@ class SelectionView: NSView {
     }
 
     override func resetCursorRects() {
-        if currentMode == .select {
-            // Don't set a fixed cursor rect — hover state manages cursors dynamically
-        } else if let cursor = crosshairCursor {
-            addCursorRect(bounds, cursor: cursor)
-        }
+        // Don't add cursor rects — we manage all cursors via the 120Hz timer
+        // and mouse event handlers. System cursor rects fight with our dynamic
+        // cursor logic and cause flicker.
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if editingTextAnnotation != nil {
-            NSCursor.iBeam.set()
-        } else if currentMode == .select {
-            // Let hover state manage cursor — just do a quick update
-            if let pos = currentMousePosition {
-                updateHoverState(at: pos)
-            } else {
-                NSCursor.arrow.set()
-            }
-        } else {
+        // During drag/draw, updateHoverState returns early without setting a cursor.
+        // We must set the correct cursor here so the system doesn't revert to default.
+        if isDraggingAnnotation, let handle = activeHandle {
+            cursorForHandle(handle, isDragging: true).set()
+            return
+        }
+        if isDrawingAnnotation {
             crosshairCursor?.set()
+            return
+        }
+        if let pos = currentMousePosition {
+            updateHoverState(at: pos)
         }
     }
 
     override func mouseEntered(with event: NSEvent) {
-        if editingTextAnnotation != nil {
-            NSCursor.iBeam.set()
-        } else if currentMode == .select {
-            // Let hover state manage cursor
-            if let pos = currentMousePosition {
-                updateHoverState(at: pos)
-            } else {
-                NSCursor.arrow.set()
-            }
-        } else {
+        if isDraggingAnnotation, let handle = activeHandle {
+            cursorForHandle(handle, isDragging: true).set()
+            return
+        }
+        if isDrawingAnnotation {
             crosshairCursor?.set()
+            return
+        }
+        if let pos = currentMousePosition {
+            updateHoverState(at: pos)
         }
     }
 
@@ -627,8 +668,12 @@ class SelectionView: NSView {
         case 1: // S - select mode
             currentMode = .select
             needsDisplay = true
-        case 48: // Tab - region select mode
-            currentMode = .regionSelect
+        case 48: // Tab - toggle region select mode
+            if currentMode == .regionSelect {
+                currentMode = modeBeforeRegionSelect
+            } else {
+                currentMode = .regionSelect
+            }
             needsDisplay = true
         case 15: // R - rectangle annotation mode
             currentMode = .rectangle
@@ -858,7 +903,10 @@ class SelectionView: NSView {
                 }
             }
 
-            // No annotation hit — start drawing new one
+            // No annotation hit — deselect and start drawing new one
+            selectedAnnotation = nil
+            selectionHandleLayer?.removeFromSuperlayer()
+            selectionHandleLayer = nil
             isDrawingAnnotation = true
             currentDrawingTool = currentMode
             annotationStart = point
@@ -901,7 +949,10 @@ class SelectionView: NSView {
                 }
             }
 
-            // No annotation hit — start a new text annotation at click position
+            // No annotation hit — deselect and start a new text annotation at click position
+            selectedAnnotation = nil
+            selectionHandleLayer?.removeFromSuperlayer()
+            selectionHandleLayer = nil
             let annotation = TextAnnotation(position: point, color: annotationColor)
             editingTextAnnotation = annotation
 
@@ -1077,8 +1128,8 @@ class SelectionView: NSView {
     override func mouseMoved(with event: NSEvent) {
         currentMousePosition = convert(event.locationInWindow, from: nil)
         // Hover detection and coord display handled by 120Hz timer
-        // In select mode, cursor is managed by updateHoverState
-        if currentMode != .select && hoveredAnnotation == nil {
+        // Don't override cursor when it's managed by hover/handle state
+        if currentMode != .select && hoveredAnnotation == nil && !isHoveringSelectedHandle {
             crosshairCursor?.set()
         }
     }

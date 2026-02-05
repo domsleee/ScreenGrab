@@ -127,6 +127,9 @@ class ScreenCaptureManager {
             window.stopEventMonitors()
         }
         overlayWindows.removeAll()
+
+        // Restore focus to the app that was active before capture started
+        previousApp?.activate()
         previousApp = nil
     }
 
