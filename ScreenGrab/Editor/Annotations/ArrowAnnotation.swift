@@ -3,7 +3,7 @@ import CoreGraphics
 import AppKit
 
 class ArrowAnnotation: Annotation {
-    let id = UUID()
+    let id: UUID
     var startPoint: CGPoint
     var endPoint: CGPoint
     var color: CGColor
@@ -36,7 +36,8 @@ class ArrowAnnotation: Annotation {
         }
     }
 
-    init(startPoint: CGPoint, endPoint: CGPoint, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 3.0) {
+    init(id: UUID = UUID(), startPoint: CGPoint, endPoint: CGPoint, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 3.0) {
+        self.id = id
         self.startPoint = startPoint
         self.endPoint = endPoint
         self.color = color

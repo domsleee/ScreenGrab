@@ -129,6 +129,11 @@ class SelectionView: NSView {
     private var annotationLayers: [UUID: CALayer] = [:]
     private var selectionHandleLayer: CAShapeLayer?
 
+    // Undo/redo
+    private var undoStack: [[AnnotationSnapshot]] = []
+    private var redoStack: [[AnnotationSnapshot]] = []
+    private var textEditUndoAlreadyPushed = false
+
     private var annotationColor = NSColor.red.cgColor
     private let strokeWidth: CGFloat = 3.0
 
@@ -648,6 +653,16 @@ class SelectionView: NSView {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
+        // Cmd+Z = undo, Cmd+Shift+Z = redo (works in all modes)
+        if event.modifierFlags.contains(.command) && event.keyCode == 6 { // Z key
+            if event.modifierFlags.contains(.shift) {
+                performRedo()
+            } else {
+                performUndo()
+            }
+            return
+        }
+
         // If we're editing text, handle text input instead of shortcuts
         if editingTextAnnotation != nil {
             handleTextKeyEvent(event)
@@ -678,6 +693,7 @@ class SelectionView: NSView {
             needsDisplay = true
         case 51: // Delete
             if let selected = selectedAnnotation {
+                pushUndoState()
                 annotations.removeAll { $0.id == selected.id }
                 selectedAnnotation = nil
                 selectionHandleLayer?.removeFromSuperlayer()
@@ -723,6 +739,9 @@ class SelectionView: NSView {
     }
 
     private func beginEditingTextAnnotation(_ annotation: TextAnnotation) {
+        pushUndoState()
+        textEditUndoAlreadyPushed = true
+
         // Remove from committed annotations and its layer
         annotations.removeAll { $0.id == annotation.id }
         annotationLayers[annotation.id]?.removeFromSuperlayer()
@@ -753,6 +772,11 @@ class SelectionView: NSView {
 
     private func commitTextAnnotation() {
         guard let annotation = editingTextAnnotation else { return }
+
+        if !textEditUndoAlreadyPushed {
+            pushUndoState()
+        }
+        textEditUndoAlreadyPushed = false
 
         // Remove the editing layer
         editingTextLayer?.removeFromSuperlayer()
@@ -806,6 +830,76 @@ class SelectionView: NSView {
         return textLayer
     }
 
+    // MARK: - Undo/Redo
+
+    enum AnnotationSnapshot {
+        case arrow(id: UUID, startPoint: CGPoint, endPoint: CGPoint, color: CGColor, strokeWidth: CGFloat)
+        case rectangle(id: UUID, bounds: CGRect, color: CGColor, strokeWidth: CGFloat)
+        case text(id: UUID, text: String, position: CGPoint, fontSize: CGFloat, color: CGColor)
+    }
+
+    private func snapshotAnnotations() -> [AnnotationSnapshot] {
+        annotations.map { annotation in
+            if let arrow = annotation as? ArrowAnnotation {
+                return .arrow(id: arrow.id, startPoint: arrow.startPoint, endPoint: arrow.endPoint,
+                              color: arrow.color, strokeWidth: arrow.strokeWidth)
+            } else if let rect = annotation as? RectangleAnnotation {
+                return .rectangle(id: rect.id, bounds: rect.bounds, color: rect.color, strokeWidth: rect.strokeWidth)
+            } else if let text = annotation as? TextAnnotation {
+                return .text(id: text.id, text: text.text, position: text.position,
+                             fontSize: text.fontSize, color: text.color)
+            }
+            fatalError("Unknown annotation type")
+        }
+    }
+
+    private func restoreAnnotations(from snapshots: [AnnotationSnapshot]) {
+        annotations = snapshots.map { snapshot in
+            switch snapshot {
+            case .arrow(let id, let startPoint, let endPoint, let color, let strokeWidth):
+                return ArrowAnnotation(id: id, startPoint: startPoint, endPoint: endPoint,
+                                       color: color, strokeWidth: strokeWidth)
+            case .rectangle(let id, let bounds, let color, let strokeWidth):
+                return RectangleAnnotation(id: id, bounds: bounds, color: color, strokeWidth: strokeWidth)
+            case .text(let id, let text, let position, let fontSize, let color):
+                return TextAnnotation(id: id, text: text, position: position, fontSize: fontSize, color: color)
+            }
+        }
+
+        // Re-select the previously selected annotation if it still exists
+        if let selectedId = selectedAnnotation?.id {
+            selectedAnnotation = annotations.first { $0.id == selectedId }
+        } else {
+            selectedAnnotation = nil
+        }
+
+        selectionHandleLayer?.removeFromSuperlayer()
+        selectionHandleLayer = nil
+        if selectedAnnotation != nil {
+            updateSelectionHandlesLayer()
+        }
+
+        syncAnnotationLayers()
+        needsDisplay = true
+    }
+
+    private func pushUndoState() {
+        undoStack.append(snapshotAnnotations())
+        redoStack.removeAll()
+    }
+
+    private func performUndo() {
+        guard let previous = undoStack.popLast() else { return }
+        redoStack.append(snapshotAnnotations())
+        restoreAnnotations(from: previous)
+    }
+
+    private func performRedo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(snapshotAnnotations())
+        restoreAnnotations(from: next)
+    }
+
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
@@ -837,6 +931,7 @@ class SelectionView: NSView {
             // Check if clicking on an annotation
             for annotation in annotations.reversed() {
                 if let handle = annotation.hitTest(point: point) {
+                    pushUndoState()
                     selectedAnnotation = annotation
                     activeHandle = handle
                     isDraggingAnnotation = true
@@ -871,6 +966,7 @@ class SelectionView: NSView {
             for annotation in annotations.reversed() {
                 let rect = visualBounds(for: annotation).insetBy(dx: -4, dy: -4)
                 if rect.contains(point) {
+                    pushUndoState()
                     selectedAnnotation = annotation
                     // Use precise hitTest for endpoint/corner handles, fall back to .body
                     let handle = annotation.hitTest(point: point) ?? .body
@@ -918,6 +1014,7 @@ class SelectionView: NSView {
                         beginEditingTextAnnotation(textAnnotation)
                         return
                     }
+                    pushUndoState()
                     selectedAnnotation = annotation
                     let handle = annotation.hitTest(point: point) ?? .body
                     activeHandle = handle
@@ -1077,6 +1174,7 @@ class SelectionView: NSView {
             if currentDrawingTool == .arrow {
                 let distance = hypot(end.x - start.x, end.y - start.y)
                 if distance > 10 {
+                    pushUndoState()
                     let annotation = ArrowAnnotation(
                         startPoint: start, endPoint: end,
                         color: annotationColor, strokeWidth: strokeWidth
@@ -1087,6 +1185,7 @@ class SelectionView: NSView {
             } else {
                 let rect = rectFromPoints(start, end)
                 if rect.width > 5 && rect.height > 5 {
+                    pushUndoState()
                     let annotation = RectangleAnnotation(
                         bounds: rect, color: annotationColor, strokeWidth: strokeWidth
                     )
@@ -1287,6 +1386,7 @@ class SelectionView: NSView {
             AppSettings.shared.annotationColorRGBA = components
         }
         if let selected = selectedAnnotation {
+            pushUndoState()
             selected.color = color
             updateAnnotationLayer(for: selected)
             if let arrow = selected as? ArrowAnnotation {

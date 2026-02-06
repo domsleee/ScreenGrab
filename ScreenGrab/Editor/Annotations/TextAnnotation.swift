@@ -3,7 +3,7 @@ import CoreGraphics
 import AppKit
 
 class TextAnnotation: Annotation {
-    let id = UUID()
+    let id: UUID
     var text: String
     var position: CGPoint
     var fontSize: CGFloat
@@ -20,7 +20,8 @@ class TextAnnotation: Annotation {
         }
     }
 
-    init(text: String = "", position: CGPoint, fontSize: CGFloat = 24, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 0) {
+    init(id: UUID = UUID(), text: String = "", position: CGPoint, fontSize: CGFloat = 24, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 0) {
+        self.id = id
         self.text = text
         self.position = position
         self.fontSize = fontSize

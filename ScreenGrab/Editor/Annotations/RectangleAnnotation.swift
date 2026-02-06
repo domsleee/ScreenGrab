@@ -3,12 +3,13 @@ import CoreGraphics
 import AppKit
 
 class RectangleAnnotation: Annotation {
-    let id = UUID()
+    let id: UUID
     var bounds: CGRect
     var color: CGColor
     var strokeWidth: CGFloat
 
-    init(bounds: CGRect, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 3.0) {
+    init(id: UUID = UUID(), bounds: CGRect, color: CGColor = NSColor.red.cgColor, strokeWidth: CGFloat = 3.0) {
+        self.id = id
         self.bounds = bounds
         self.color = color
         self.strokeWidth = strokeWidth
