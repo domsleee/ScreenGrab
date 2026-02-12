@@ -33,7 +33,7 @@ class TextAnnotation: Annotation {
                       width: size.width + backgroundPadding * 2, height: size.height + backgroundPadding * 2)
     }
 
-    init(id: UUID = UUID(), text: String = "", position: CGPoint, fontSize: CGFloat = 24, color: CGColor = NSColor.red.cgColor, backgroundColor: CGColor? = nil, backgroundPadding: CGFloat = 4, strokeWidth: CGFloat = 0) {
+    init(id: UUID = UUID(), text: String = "", position: CGPoint, fontSize: CGFloat = 24, color: CGColor = NSColor.white.cgColor, backgroundColor: CGColor? = nil, backgroundPadding: CGFloat = 4, strokeWidth: CGFloat = 0) {
         self.id = id
         self.text = text
         self.position = position

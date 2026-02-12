@@ -89,6 +89,10 @@ class SelectionView: NSView {
             if oldValue == .text && currentMode != .text {
                 commitTextAnnotation()
             }
+            // Hide text popover when leaving text mode
+            if currentMode != .text {
+                hideTextPopover()
+            }
             // Track the last non-regionSelect mode for Tab toggling
             if oldValue != .regionSelect {
                 modeBeforeRegionSelect = oldValue
@@ -137,6 +141,7 @@ class SelectionView: NSView {
     private var textEditUndoAlreadyPushed = false
 
     private var annotationColor = NSColor.red.cgColor
+    private var textForegroundColor: CGColor = NSColor.white.cgColor
     private let strokeWidth: CGFloat = 3.0
     private var textFontSize: CGFloat = 24
     private let fontSizeRange: ClosedRange<CGFloat> = 10...120
@@ -242,7 +247,11 @@ class SelectionView: NSView {
         if let rgba = AppSettings.shared.annotationColorRGBA, rgba.count == 4 {
             annotationColor = CGColor(red: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
         }
-        // Load saved text background color
+        // Load saved text foreground color
+        if let rgba = AppSettings.shared.textForegroundColorRGBA, rgba.count == 4 {
+            textForegroundColor = CGColor(red: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        }
+        // Load saved text background color (defaults to dark gray via registerDefaults)
         if let rgba = AppSettings.shared.textBackgroundColorRGBA, rgba.count == 4 {
             textBackgroundColor = CGColor(red: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
         }
@@ -871,6 +880,7 @@ class SelectionView: NSView {
         editingTextLayer = textLayer
 
         currentMode = .text
+        showTextPopover()
         needsDisplay = true
     }
 
@@ -887,6 +897,7 @@ class SelectionView: NSView {
         editingTextLayer?.removeFromSuperlayer()
         editingTextLayer = nil
         editingTextAnnotation = nil
+        hideTextPopover()
 
         // Only add if text is non-empty
         if !annotation.text.isEmpty {
@@ -1052,6 +1063,11 @@ class SelectionView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         hideCoordDisplay()
 
+        // Check text popover clicks first
+        if handleTextPopoverClick(at: point) {
+            return
+        }
+
         // Check toolbar clicks first
         if handleToolbarClick(at: point) {
             return
@@ -1092,6 +1108,7 @@ class SelectionView: NSView {
                     CATransaction.setDisableActions(true)
                     updateSelectionHandlesLayer()
                     CATransaction.commit()
+                    updateTextPopoverForSelection()
                     return
                 }
             }
@@ -1099,6 +1116,7 @@ class SelectionView: NSView {
             selectedAnnotation = nil
             selectionHandleLayer?.removeFromSuperlayer()
             selectionHandleLayer = nil
+            updateTextPopoverForSelection()
             needsDisplay = true
         case .regionSelect:
             selectionStart = point
@@ -1132,6 +1150,7 @@ class SelectionView: NSView {
                     CATransaction.setDisableActions(true)
                     updateSelectionHandlesLayer()
                     CATransaction.commit()
+                    updateTextPopoverForSelection()
                     needsDisplay = true
                     return
                 }
@@ -1141,6 +1160,7 @@ class SelectionView: NSView {
             selectedAnnotation = nil
             selectionHandleLayer?.removeFromSuperlayer()
             selectionHandleLayer = nil
+            hideTextPopover()
             isDrawingAnnotation = true
             currentDrawingTool = currentMode
             annotationStart = point
@@ -1183,6 +1203,7 @@ class SelectionView: NSView {
                     CATransaction.setDisableActions(true)
                     updateSelectionHandlesLayer()
                     CATransaction.commit()
+                    updateTextPopoverForSelection()
                     needsDisplay = true
                     return
                 }
@@ -1192,12 +1213,13 @@ class SelectionView: NSView {
             selectedAnnotation = nil
             selectionHandleLayer?.removeFromSuperlayer()
             selectionHandleLayer = nil
-            let annotation = TextAnnotation(position: point, fontSize: textFontSize, color: annotationColor, backgroundColor: effectiveBackgroundColor(), backgroundPadding: textBackgroundPadding)
+            let annotation = TextAnnotation(position: point, fontSize: textFontSize, color: textForegroundColor, backgroundColor: effectiveBackgroundColor(), backgroundPadding: textBackgroundPadding)
             editingTextAnnotation = annotation
 
             let textLayer = createEditingTextLayer(for: annotation)
             layer?.addSublayer(textLayer)
             editingTextLayer = textLayer
+            showTextPopover()
         }
         needsDisplay = true
     }
@@ -1461,6 +1483,10 @@ class SelectionView: NSView {
         // Selection handles are also drawn via CAShapeLayers
 
         drawToolbar()
+
+        if isTextPopoverVisible {
+            drawTextPopover()
+        }
     }
 
     private func drawSizeLabel(for rect: NSRect) {
@@ -1510,6 +1536,7 @@ class SelectionView: NSView {
 
     private let colorDividerGap: CGFloat = 8
     private var isColorPopoverVisible = false
+    private var isTextPopoverVisible = false
 
     private var isTextModeActive: Bool {
         currentMode == .text || editingTextAnnotation != nil
@@ -1518,9 +1545,16 @@ class SelectionView: NSView {
     private func toolbarRect() -> NSRect {
         let count = CGFloat(toolbarButtons.count)
         let buttonsWidth = count * toolbarButtonSize + (count - 1) * toolbarSpacing
-        // One color button after divider, plus bg color button in text mode
-        let colorButtonsWidth = isTextModeActive ? (toolbarButtonSize * 2 + toolbarSpacing) : toolbarButtonSize
-        let totalWidth = buttonsWidth + colorDividerGap + colorButtonsWidth + toolbarPadding * 2
+        // Hide color buttons when text popover is visible (popover has its own controls)
+        let showColorButtons = !isTextPopoverVisible
+        let colorButtonsWidth: CGFloat
+        if showColorButtons {
+            colorButtonsWidth = isTextModeActive ? (toolbarButtonSize * 2 + toolbarSpacing) : toolbarButtonSize
+        } else {
+            colorButtonsWidth = 0
+        }
+        let dividerWidth: CGFloat = showColorButtons ? colorDividerGap : 0
+        let totalWidth = buttonsWidth + dividerWidth + colorButtonsWidth + toolbarPadding * 2
         let totalHeight = toolbarButtonSize + toolbarPadding * 2
         return NSRect(
             x: bounds.midX - totalWidth / 2,
@@ -1615,6 +1649,11 @@ class SelectionView: NSView {
     }
 
     private func applyColor(_ color: CGColor) {
+        // If editing/selected annotation is text, route to text foreground color
+        if editingTextAnnotation != nil || selectedAnnotation is TextAnnotation {
+            applyTextForegroundColor(color)
+            return
+        }
         annotationColor = color
         // Persist — convert to device RGB to ensure 4 components
         let rgbSpace = CGColorSpaceCreateDeviceRGB()
@@ -1634,6 +1673,26 @@ class SelectionView: NSView {
             if let arrow = selected as? ArrowAnnotation {
                 arrowHeadLayers[arrow.id]?.fillColor = color
             }
+        }
+        needsDisplay = true
+    }
+
+    private func applyTextForegroundColor(_ color: CGColor) {
+        textForegroundColor = color
+        // Persist
+        let rgbSpace = CGColorSpaceCreateDeviceRGB()
+        if let components = color.components, color.numberOfComponents == 4 {
+            AppSettings.shared.textForegroundColorRGBA = components
+        } else if let converted = color.converted(to: rgbSpace, intent: .defaultIntent, options: nil),
+                  let components = converted.components, converted.numberOfComponents == 4 {
+            AppSettings.shared.textForegroundColorRGBA = components
+        } else {
+            AppSettings.shared.textForegroundColorRGBA = [1.0, 1.0, 1.0, 1.0]
+        }
+        if let selected = selectedAnnotation as? TextAnnotation {
+            pushUndoState()
+            selected.color = color
+            updateAnnotationLayer(for: selected)
         }
         if let editing = editingTextAnnotation {
             editing.color = color
@@ -1703,6 +1762,8 @@ class SelectionView: NSView {
         panel.setAction(#selector(colorPanelColorChanged(_:)))
         if activeColorTarget == .background {
             panel.color = textBackgroundColor.flatMap { NSColor(cgColor: $0) } ?? .gray
+        } else if isTextModeActive {
+            panel.color = NSColor(cgColor: textForegroundColor) ?? .white
         } else {
             panel.color = NSColor(cgColor: annotationColor) ?? .red
         }
@@ -1784,20 +1845,23 @@ class SelectionView: NSView {
             }
         }
 
-        // Foreground color button toggles popover
-        if colorButtonRect().contains(point) {
-            activeColorTarget = .foreground
-            isColorPopoverVisible = !isColorPopoverVisible
-            needsDisplay = true
-            return true
-        }
+        // Color buttons are hidden when text popover is visible
+        if !isTextPopoverVisible {
+            // Foreground color button toggles popover
+            if colorButtonRect().contains(point) {
+                activeColorTarget = .foreground
+                isColorPopoverVisible = !isColorPopoverVisible
+                needsDisplay = true
+                return true
+            }
 
-        // Background color button (text mode only)
-        if isTextModeActive && bgColorButtonRect().contains(point) {
-            activeColorTarget = .background
-            isColorPopoverVisible = !isColorPopoverVisible
-            needsDisplay = true
-            return true
+            // Background color button (text mode only)
+            if isTextModeActive && bgColorButtonRect().contains(point) {
+                activeColorTarget = .background
+                isColorPopoverVisible = !isColorPopoverVisible
+                needsDisplay = true
+                return true
+            }
         }
 
         return false
@@ -1852,58 +1916,62 @@ class SelectionView: NSView {
             button.shortcut.draw(at: shortcutPoint, withAttributes: shortcutAttrs)
         }
 
-        // Draw foreground color button (filled circle showing current color)
-        let colorBtn = colorButtonRect()
-        let circleInset: CGFloat = 8
-        let circleRect = colorBtn.insetBy(dx: circleInset, dy: circleInset)
-
-        // Button background
-        NSColor.white.withAlphaComponent(0.05).setFill()
-        NSBezierPath(roundedRect: colorBtn, xRadius: 8, yRadius: 8).fill()
-
-        // Color circle
-        (NSColor(cgColor: annotationColor) ?? .red).setFill()
-        NSBezierPath(ovalIn: circleRect).fill()
-
-        // White border on fg circle (thick in text mode to distinguish from bg)
-        NSColor.white.setStroke()
-        let fgBorder = NSBezierPath(ovalIn: circleRect)
-        fgBorder.lineWidth = isTextModeActive ? 2.5 : 1.5
-        fgBorder.stroke()
-
-        // Draw background color button in text mode
-        if isTextModeActive {
-            let bgBtn = bgColorButtonRect()
-            let bgCircleRect = bgBtn.insetBy(dx: circleInset, dy: circleInset)
+        // Hide color buttons when text popover is visible (controls are in the popover)
+        if !isTextPopoverVisible {
+            // Draw foreground color button (filled circle showing current color)
+            let colorBtn = colorButtonRect()
+            let circleInset: CGFloat = 8
+            let circleRect = colorBtn.insetBy(dx: circleInset, dy: circleInset)
 
             // Button background
             NSColor.white.withAlphaComponent(0.05).setFill()
-            NSBezierPath(roundedRect: bgBtn, xRadius: 8, yRadius: 8).fill()
+            NSBezierPath(roundedRect: colorBtn, xRadius: 8, yRadius: 8).fill()
 
-            if let bgColor = effectiveBackgroundColor() {
-                // Filled circle with background color
-                (NSColor(cgColor: bgColor) ?? .gray).setFill()
-                NSBezierPath(ovalIn: bgCircleRect).fill()
-            } else {
-                // "No fill" indicator
-                drawNoFillIndicator(in: bgCircleRect)
+            // Color circle — show text foreground color in text mode, annotation color otherwise
+            let displayColor = isTextModeActive ? textForegroundColor : annotationColor
+            (NSColor(cgColor: displayColor) ?? .red).setFill()
+            NSBezierPath(ovalIn: circleRect).fill()
+
+            // White border on fg circle (thick in text mode to distinguish from bg)
+            NSColor.white.setStroke()
+            let fgBorder = NSBezierPath(ovalIn: circleRect)
+            fgBorder.lineWidth = isTextModeActive ? 2.5 : 1.5
+            fgBorder.stroke()
+
+            // Draw background color button in text mode
+            if isTextModeActive {
+                let bgBtn = bgColorButtonRect()
+                let bgCircleRect = bgBtn.insetBy(dx: circleInset, dy: circleInset)
+
+                // Button background
+                NSColor.white.withAlphaComponent(0.05).setFill()
+                NSBezierPath(roundedRect: bgBtn, xRadius: 8, yRadius: 8).fill()
+
+                if let bgColor = effectiveBackgroundColor() {
+                    // Filled circle with background color
+                    (NSColor(cgColor: bgColor) ?? .gray).setFill()
+                    NSBezierPath(ovalIn: bgCircleRect).fill()
+                } else {
+                    // "No fill" indicator
+                    drawNoFillIndicator(in: bgCircleRect)
+                }
+
+                // Thin border on bg circle
+                NSColor.white.withAlphaComponent(0.4).setStroke()
+                let bgBorder = NSBezierPath(ovalIn: bgCircleRect)
+                bgBorder.lineWidth = 1.0
+                bgBorder.stroke()
             }
 
-            // Thin border on bg circle
-            NSColor.white.withAlphaComponent(0.4).setStroke()
-            let bgBorder = NSBezierPath(ovalIn: bgCircleRect)
-            bgBorder.lineWidth = 1.0
-            bgBorder.stroke()
-        }
+            // Draw font size indicator when in text mode
+            if isTextModeActive {
+                drawFontSizeIndicator(below: toolbar)
+            }
 
-        // Draw font size indicator when in text mode
-        if isTextModeActive {
-            drawFontSizeIndicator(below: toolbar)
-        }
-
-        // Draw color popover if visible
-        if isColorPopoverVisible {
-            drawColorPopover()
+            // Draw color popover if visible
+            if isColorPopoverVisible {
+                drawColorPopover()
+            }
         }
     }
 
@@ -2045,6 +2113,486 @@ class SelectionView: NSView {
               let aComps = ac.components, let bComps = bc.components,
               aComps.count == bComps.count else { return false }
         return zip(aComps, bComps).allSatisfy { abs($0 - $1) < 0.01 }
+    }
+
+    // MARK: - Text Popover
+
+    private let textPopoverWidth: CGFloat = 260
+    private let textPopoverPadding: CGFloat = 10
+
+    /// Returns the annotation rect that the text popover should anchor to.
+    private func textPopoverAnchor() -> CGRect? {
+        if let editing = editingTextAnnotation {
+            return editing.backgroundRect.isEmpty ? editing.bounds : editing.backgroundRect
+        }
+        if let selected = selectedAnnotation as? TextAnnotation {
+            return selected.backgroundRect.isEmpty ? selected.bounds : selected.backgroundRect
+        }
+        return nil
+    }
+
+    private func textPopoverRect() -> NSRect {
+        guard let anchor = textPopoverAnchor() else {
+            // Fallback: center below toolbar
+            let toolbar = toolbarRect()
+            return NSRect(x: toolbar.midX - textPopoverWidth / 2,
+                          y: toolbar.minY - 230,
+                          width: textPopoverWidth, height: 220)
+        }
+
+        let popoverHeight: CGFloat = 220
+        let gap: CGFloat = 8
+
+        // Try above the annotation
+        var x = anchor.midX - textPopoverWidth / 2
+        var y = anchor.maxY + gap
+
+        // If too close to top, flip below
+        if y + popoverHeight > bounds.height - 10 {
+            y = anchor.minY - popoverHeight - gap
+        }
+
+        // Clamp to screen bounds
+        x = max(10, min(x, bounds.width - textPopoverWidth - 10))
+        y = max(10, min(y, bounds.height - popoverHeight - 10))
+
+        return NSRect(x: x, y: y, width: textPopoverWidth, height: popoverHeight)
+    }
+
+    private struct TextPreset {
+        let label: String
+        let textColor: CGColor
+        let bgColor: CGColor?
+        let bgOpacity: CGFloat
+    }
+
+    private let textPresets: [TextPreset] = [
+        TextPreset(label: "Wht/Dark", textColor: NSColor.white.cgColor,
+                   bgColor: CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1), bgOpacity: 0.75),
+        TextPreset(label: "Blk/Light", textColor: NSColor.black.cgColor,
+                   bgColor: CGColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1), bgOpacity: 0.85),
+        TextPreset(label: "Yellow", textColor: CGColor(red: 1, green: 0.95, blue: 0, alpha: 1),
+                   bgColor: nil, bgOpacity: 0.75),
+    ]
+
+    private func drawTextPopover() {
+        let popover = textPopoverRect()
+
+        // Shadow
+        let shadowRect = popover.insetBy(dx: -2, dy: -2).offsetBy(dx: 0, dy: -2)
+        NSColor.black.withAlphaComponent(0.3).setFill()
+        NSBezierPath(roundedRect: shadowRect, xRadius: 10, yRadius: 10).fill()
+
+        // Background
+        NSColor(white: 0.15, alpha: 0.95).setFill()
+        NSBezierPath(roundedRect: popover, xRadius: 8, yRadius: 8).fill()
+
+        // Border
+        NSColor.white.withAlphaComponent(0.1).setStroke()
+        let borderPath = NSBezierPath(roundedRect: popover, xRadius: 8, yRadius: 8)
+        borderPath.lineWidth = 0.5
+        borderPath.stroke()
+
+        let p = textPopoverPadding
+        let contentWidth = popover.width - p * 2
+        var curY = popover.maxY - p
+
+        // --- Presets Row ---
+        let presetHeight: CGFloat = 24
+        curY -= presetHeight
+        let presetWidth = (contentWidth - CGFloat(textPresets.count - 1) * 4) / CGFloat(textPresets.count)
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85)
+        ]
+        for (i, preset) in textPresets.enumerated() {
+            let btnRect = NSRect(x: popover.minX + p + CGFloat(i) * (presetWidth + 4),
+                                 y: curY, width: presetWidth, height: presetHeight)
+            NSColor.white.withAlphaComponent(0.08).setFill()
+            NSBezierPath(roundedRect: btnRect, xRadius: 4, yRadius: 4).fill()
+            let sz = preset.label.size(withAttributes: labelAttrs)
+            preset.label.draw(at: NSPoint(x: btnRect.midX - sz.width / 2,
+                                          y: btnRect.minY + (btnRect.height - sz.height) / 2),
+                              withAttributes: labelAttrs)
+        }
+
+        // --- Separator ---
+        curY -= 8
+        NSColor.white.withAlphaComponent(0.1).setFill()
+        NSRect(x: popover.minX + p, y: curY, width: contentWidth, height: 1).fill()
+        curY -= 6
+
+        // --- Text Color section ---
+        let sectionLabelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.5)
+        ]
+        let textColorLabel = "Text Color"
+        curY -= 14
+        textColorLabel.draw(at: NSPoint(x: popover.minX + p, y: curY), withAttributes: sectionLabelAttrs)
+        curY -= 4
+
+        // Color grid: 6 columns, 2 rows
+        let swatchSize: CGFloat = 20
+        let swatchSpacing: CGFloat = 5
+        let rows = Int(ceil(Double(colorPalette.count) / 6.0))
+        for row in 0..<rows {
+            curY -= swatchSize
+            for col in 0..<6 {
+                let index = row * 6 + col
+                guard index < colorPalette.count else { continue }
+                let color = colorPalette[index]
+                let x = popover.minX + p + CGFloat(col) * (swatchSize + swatchSpacing)
+                let swatchRect = NSRect(x: x, y: curY, width: swatchSize, height: swatchSize)
+
+                let isActive = colorsMatch(color.cgColor, textForegroundColor)
+                if isActive {
+                    NSColor.white.setFill()
+                    NSBezierPath(roundedRect: swatchRect.insetBy(dx: -2, dy: -2), xRadius: 4, yRadius: 4).fill()
+                }
+                color.setFill()
+                NSBezierPath(roundedRect: swatchRect, xRadius: 3, yRadius: 3).fill()
+                NSColor.white.withAlphaComponent(0.15).setStroke()
+                let sBorder = NSBezierPath(roundedRect: swatchRect, xRadius: 3, yRadius: 3)
+                sBorder.lineWidth = 0.5
+                sBorder.stroke()
+            }
+            if row < rows - 1 { curY -= swatchSpacing }
+        }
+
+        // "Custom..." button
+        curY -= 4
+        let customHeight: CGFloat = 22
+        curY -= customHeight
+        let customRect = NSRect(x: popover.minX + p, y: curY, width: contentWidth, height: customHeight)
+        NSColor.white.withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: customRect, xRadius: 4, yRadius: 4).fill()
+        let customAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.7)
+        ]
+        let customText = "Custom..."
+        let customSize = customText.size(withAttributes: customAttrs)
+        customText.draw(at: NSPoint(x: customRect.midX - customSize.width / 2,
+                                    y: customRect.minY + (customRect.height - customSize.height) / 2),
+                        withAttributes: customAttrs)
+
+        // --- Separator ---
+        curY -= 6
+        NSColor.white.withAlphaComponent(0.1).setFill()
+        NSRect(x: popover.minX + p, y: curY, width: contentWidth, height: 1).fill()
+        curY -= 6
+
+        // --- Font Size Row ---
+        let sizeRowHeight: CGFloat = 24
+        curY -= sizeRowHeight
+        let sizeLabel = "Size"
+        sizeLabel.draw(at: NSPoint(x: popover.minX + p, y: curY + (sizeRowHeight - 14) / 2),
+                       withAttributes: sectionLabelAttrs)
+
+        let displaySize = editingTextAnnotation?.fontSize ?? (selectedAnnotation as? TextAnnotation)?.fontSize ?? textFontSize
+        let sizeBtnWidth: CGFloat = 28
+        let sizeValueWidth: CGFloat = 44
+
+        // Minus button
+        let minusRect = NSRect(x: popover.minX + p + 40, y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+        NSColor.white.withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: minusRect, xRadius: 4, yRadius: 4).fill()
+        let btnLabelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .bold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.8)
+        ]
+        let minusSize = "−".size(withAttributes: btnLabelAttrs)
+        "−".draw(at: NSPoint(x: minusRect.midX - minusSize.width / 2,
+                             y: minusRect.minY + (minusRect.height - minusSize.height) / 2),
+                 withAttributes: btnLabelAttrs)
+
+        // Size value
+        let valueRect = NSRect(x: minusRect.maxX + 4, y: curY, width: sizeValueWidth, height: sizeRowHeight)
+        let valueAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.9)
+        ]
+        let valueStr = "\(Int(displaySize))pt"
+        let valueSize = valueStr.size(withAttributes: valueAttrs)
+        valueStr.draw(at: NSPoint(x: valueRect.midX - valueSize.width / 2,
+                                  y: valueRect.minY + (valueRect.height - valueSize.height) / 2),
+                      withAttributes: valueAttrs)
+
+        // Plus button
+        let plusRect = NSRect(x: valueRect.maxX + 4, y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+        NSColor.white.withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: plusRect, xRadius: 4, yRadius: 4).fill()
+        let plusSize = "+".size(withAttributes: btnLabelAttrs)
+        "+".draw(at: NSPoint(x: plusRect.midX - plusSize.width / 2,
+                             y: plusRect.minY + (plusRect.height - plusSize.height) / 2),
+                 withAttributes: btnLabelAttrs)
+
+        // --- Separator ---
+        curY -= 6
+        NSColor.white.withAlphaComponent(0.1).setFill()
+        NSRect(x: popover.minX + p, y: curY, width: contentWidth, height: 1).fill()
+        curY -= 6
+
+        // --- Background Row ---
+        let bgRowHeight: CGFloat = 24
+        curY -= bgRowHeight
+        let bgLabel = "Background"
+        bgLabel.draw(at: NSPoint(x: popover.minX + p, y: curY + (bgRowHeight - 14) / 2),
+                     withAttributes: sectionLabelAttrs)
+
+        // Background color swatch
+        let bgSwatchRect = NSRect(x: popover.minX + p + 70, y: curY + 2, width: 20, height: 20)
+        if let bgColor = effectiveBackgroundColor() {
+            (NSColor(cgColor: bgColor) ?? .gray).setFill()
+            NSBezierPath(roundedRect: bgSwatchRect, xRadius: 3, yRadius: 3).fill()
+        } else {
+            drawNoFillIndicator(in: bgSwatchRect)
+        }
+        NSColor.white.withAlphaComponent(0.2).setStroke()
+        let bgBorder = NSBezierPath(roundedRect: bgSwatchRect, xRadius: 3, yRadius: 3)
+        bgBorder.lineWidth = 0.5
+        bgBorder.stroke()
+
+        // "No Fill" toggle
+        let noFillRect = NSRect(x: bgSwatchRect.maxX + 6, y: curY, width: 44, height: bgRowHeight)
+        let isNoFill = textBackgroundColor == nil
+        if isNoFill {
+            NSColor.white.withAlphaComponent(0.2).setFill()
+        } else {
+            NSColor.white.withAlphaComponent(0.06).setFill()
+        }
+        NSBezierPath(roundedRect: noFillRect, xRadius: 4, yRadius: 4).fill()
+        let noFillAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.7)
+        ]
+        let noFillSize = "No Fill".size(withAttributes: noFillAttrs)
+        "No Fill".draw(at: NSPoint(x: noFillRect.midX - noFillSize.width / 2,
+                                   y: noFillRect.minY + (noFillRect.height - noFillSize.height) / 2),
+                       withAttributes: noFillAttrs)
+
+        // Opacity presets: 25 50 75 100
+        let opacityBtnWidth: CGFloat = 28
+        let opacityStartX = noFillRect.maxX + 4
+        let opAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.7)
+        ]
+        for (i, opacity) in opacityPresets.enumerated() {
+            let btnRect = NSRect(x: opacityStartX + CGFloat(i) * (opacityBtnWidth + 2),
+                                 y: curY, width: opacityBtnWidth, height: bgRowHeight)
+            let isActive = textBackgroundColor != nil && abs(textBackgroundOpacity - opacity) < 0.01
+            if isActive {
+                NSColor.white.withAlphaComponent(0.2).setFill()
+            } else {
+                NSColor.white.withAlphaComponent(0.06).setFill()
+            }
+            NSBezierPath(roundedRect: btnRect, xRadius: 3, yRadius: 3).fill()
+            let label = "\(Int(opacity * 100))"
+            let lsz = label.size(withAttributes: opAttrs)
+            label.draw(at: NSPoint(x: btnRect.midX - lsz.width / 2,
+                                   y: btnRect.minY + (btnRect.height - lsz.height) / 2),
+                       withAttributes: opAttrs)
+        }
+    }
+
+    /// Handle click inside the text popover. Returns true if the click was consumed.
+    private func handleTextPopoverClick(at point: NSPoint) -> Bool {
+        guard isTextPopoverVisible else { return false }
+        let popover = textPopoverRect()
+        guard popover.contains(point) else {
+            // Click outside text popover dismisses it
+            isTextPopoverVisible = false
+            needsDisplay = true
+            return false
+        }
+
+        let p = textPopoverPadding
+        let contentWidth = popover.width - p * 2
+        var curY = popover.maxY - p
+
+        // --- Presets ---
+        let presetHeight: CGFloat = 24
+        curY -= presetHeight
+        let presetWidth = (contentWidth - CGFloat(textPresets.count - 1) * 4) / CGFloat(textPresets.count)
+        for (i, preset) in textPresets.enumerated() {
+            let btnRect = NSRect(x: popover.minX + p + CGFloat(i) * (presetWidth + 4),
+                                 y: curY, width: presetWidth, height: presetHeight)
+            if btnRect.contains(point) {
+                applyTextForegroundColor(preset.textColor)
+                if let bgColor = preset.bgColor {
+                    applyBackgroundColor(bgColor)
+                    textBackgroundOpacity = preset.bgOpacity
+                    AppSettings.shared.textBackgroundOpacity = preset.bgOpacity
+                    // Re-apply effective bg
+                    if let editing = editingTextAnnotation {
+                        editing.backgroundColor = effectiveBackgroundColor()
+                        updateEditingTextLayer()
+                    }
+                    if let selected = selectedAnnotation as? TextAnnotation {
+                        selected.backgroundColor = effectiveBackgroundColor()
+                        syncAnnotationLayers()
+                    }
+                } else {
+                    applyBackgroundColor(nil)
+                }
+                needsDisplay = true
+                return true
+            }
+        }
+
+        // Skip separator
+        curY -= 8 + 1 + 6
+
+        // --- Text Color label ---
+        curY -= 14 + 4
+
+        // --- Color grid ---
+        let swatchSize: CGFloat = 20
+        let swatchSpacing: CGFloat = 5
+        let rows = Int(ceil(Double(colorPalette.count) / 6.0))
+        for row in 0..<rows {
+            curY -= swatchSize
+            for col in 0..<6 {
+                let index = row * 6 + col
+                guard index < colorPalette.count else { continue }
+                let x = popover.minX + p + CGFloat(col) * (swatchSize + swatchSpacing)
+                let swatchRect = NSRect(x: x, y: curY, width: swatchSize, height: swatchSize)
+                if swatchRect.contains(point) {
+                    applyTextForegroundColor(colorPalette[index].cgColor)
+                    needsDisplay = true
+                    return true
+                }
+            }
+            if row < rows - 1 { curY -= swatchSpacing }
+        }
+
+        // --- Custom button ---
+        curY -= 4
+        let customHeight: CGFloat = 22
+        curY -= customHeight
+        let customRect = NSRect(x: popover.minX + p, y: curY, width: contentWidth, height: customHeight)
+        if customRect.contains(point) {
+            activeColorTarget = .foreground
+            openSystemColorPicker()
+            return true
+        }
+
+        // Skip separator
+        curY -= 6 + 1 + 6
+
+        // --- Font Size Row ---
+        let sizeRowHeight: CGFloat = 24
+        curY -= sizeRowHeight
+        let sizeBtnWidth: CGFloat = 28
+
+        let minusRect = NSRect(x: popover.minX + p + 40, y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+        if minusRect.contains(point) {
+            if let editing = editingTextAnnotation {
+                adjustFontSize(by: -2, for: editing)
+            } else if let selected = selectedAnnotation as? TextAnnotation {
+                pushUndoState()
+                selected.fontSize = (selected.fontSize - 2).clampedTo(fontSizeRange)
+                textFontSize = selected.fontSize
+                syncAnnotationLayers()
+            } else {
+                textFontSize = (textFontSize - 2).clampedTo(fontSizeRange)
+            }
+            needsDisplay = true
+            return true
+        }
+
+        let sizeValueWidth: CGFloat = 44
+        let plusRect = NSRect(x: minusRect.maxX + 4 + sizeValueWidth + 4, y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+        if plusRect.contains(point) {
+            if let editing = editingTextAnnotation {
+                adjustFontSize(by: 2, for: editing)
+            } else if let selected = selectedAnnotation as? TextAnnotation {
+                pushUndoState()
+                selected.fontSize = (selected.fontSize + 2).clampedTo(fontSizeRange)
+                textFontSize = selected.fontSize
+                syncAnnotationLayers()
+            } else {
+                textFontSize = (textFontSize + 2).clampedTo(fontSizeRange)
+            }
+            needsDisplay = true
+            return true
+        }
+
+        // Skip separator
+        curY -= 6 + 1 + 6
+
+        // --- Background Row ---
+        let bgRowHeight: CGFloat = 24
+        curY -= bgRowHeight
+
+        // Background color swatch — open background color picker
+        let bgSwatchRect = NSRect(x: popover.minX + p + 70, y: curY + 2, width: 20, height: 20)
+        if bgSwatchRect.contains(point) {
+            activeColorTarget = .background
+            openSystemColorPicker()
+            return true
+        }
+
+        // "No Fill" toggle
+        let noFillRect = NSRect(x: bgSwatchRect.maxX + 6, y: curY, width: 44, height: bgRowHeight)
+        if noFillRect.contains(point) {
+            applyBackgroundColor(nil)
+            needsDisplay = true
+            return true
+        }
+
+        // Opacity presets
+        let opacityBtnWidth: CGFloat = 28
+        let opacityStartX = noFillRect.maxX + 4
+        for (i, opacity) in opacityPresets.enumerated() {
+            let btnRect = NSRect(x: opacityStartX + CGFloat(i) * (opacityBtnWidth + 2),
+                                 y: curY, width: opacityBtnWidth, height: bgRowHeight)
+            if btnRect.contains(point) {
+                // If no bg color, set a default dark gray
+                if textBackgroundColor == nil {
+                    textBackgroundColor = CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+                    AppSettings.shared.textBackgroundColorRGBA = [0.1, 0.1, 0.1, 1.0]
+                }
+                textBackgroundOpacity = opacity
+                AppSettings.shared.textBackgroundOpacity = opacity
+                if let selected = selectedAnnotation as? TextAnnotation {
+                    pushUndoState()
+                    selected.backgroundColor = effectiveBackgroundColor()
+                    syncAnnotationLayers()
+                }
+                if let editing = editingTextAnnotation {
+                    editing.backgroundColor = effectiveBackgroundColor()
+                    updateEditingTextLayer()
+                }
+                needsDisplay = true
+                return true
+            }
+        }
+
+        return true // absorb click inside popover
+    }
+
+    private func showTextPopover() {
+        isTextPopoverVisible = true
+        isColorPopoverVisible = false
+        needsDisplay = true
+    }
+
+    private func hideTextPopover() {
+        guard isTextPopoverVisible else { return }
+        isTextPopoverVisible = false
+        needsDisplay = true
+    }
+
+    /// Call after changing selectedAnnotation to show/hide text popover as needed.
+    private func updateTextPopoverForSelection() {
+        if selectedAnnotation is TextAnnotation {
+            showTextPopover()
+        } else if editingTextAnnotation == nil {
+            hideTextPopover()
+        }
     }
 
     private func rectFromPoints(_ p1: NSPoint, _ p2: NSPoint) -> NSRect {

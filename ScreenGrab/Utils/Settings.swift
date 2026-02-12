@@ -33,7 +33,9 @@ final class AppSettings {
             Key.copyToClipboard.rawValue: true,
             Key.playSound.rawValue: true,
             Key.savePath.rawValue: ("~/Pictures/ScreenGrab" as NSString).expandingTildeInPath,
-            "textBackgroundOpacity": 0.75
+            "textBackgroundOpacity": 0.75,
+            "textForegroundColorRGBA": [1.0, 1.0, 1.0, 1.0],
+            "textBackgroundColorRGBA": [0.1, 0.1, 0.1, 1.0]
         ])
     }
 
@@ -83,6 +85,11 @@ final class AppSettings {
     var annotationColorRGBA: [CGFloat]? {
         get { defaults.array(forKey: "annotationColorRGBA") as? [CGFloat] }
         set { defaults.set(newValue, forKey: "annotationColorRGBA") }
+    }
+
+    var textForegroundColorRGBA: [CGFloat]? {
+        get { defaults.array(forKey: "textForegroundColorRGBA") as? [CGFloat] }
+        set { defaults.set(newValue, forKey: "textForegroundColorRGBA") }
     }
 
     var textBackgroundColorRGBA: [CGFloat]? {
