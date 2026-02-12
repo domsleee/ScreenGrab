@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var screenCaptureManager: ScreenCaptureManager?
     private var settingsWindow: NSWindow?
+    private var aboutWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logInfo("ScreenGrab starting up")
@@ -31,6 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Open Save Folder", action: #selector(openSaveFolder), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "About ScreenGrab", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -100,6 +102,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.contentView = contentView
         settingsWindow = window
+
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func showAbout() {
+        if let existing = aboutWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "About ScreenGrab"
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        guard let windowContentView = window.contentView else { return }
+        let contentView = NSView(frame: windowContentView.bounds)
+        contentView.autoresizingMask = [.width, .height]
+
+        // App icon
+        let iconView = NSImageView(frame: NSRect(x: 115, y: 110, width: 64, height: 64))
+        iconView.image = NSApp.applicationIconImage
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        contentView.addSubview(iconView)
+
+        // App name
+        let nameLabel = NSTextField(labelWithString: "ScreenGrab")
+        nameLabel.font = NSFont.systemFont(ofSize: 18, weight: .bold)
+        nameLabel.alignment = .center
+        nameLabel.frame = NSRect(x: 0, y: 80, width: 300, height: 24)
+        contentView.addSubview(nameLabel)
+
+        // Version
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        let versionLabel = NSTextField(labelWithString: "Version \(version)")
+        versionLabel.font = NSFont.systemFont(ofSize: 12)
+        versionLabel.textColor = .secondaryLabelColor
+        versionLabel.alignment = .center
+        versionLabel.frame = NSRect(x: 0, y: 55, width: 300, height: 18)
+        contentView.addSubview(versionLabel)
+
+        // Copyright
+        let copyrightLabel = NSTextField(labelWithString: "\u{00A9} 2026 ScreenGrab")
+        copyrightLabel.font = NSFont.systemFont(ofSize: 11)
+        copyrightLabel.textColor = .tertiaryLabelColor
+        copyrightLabel.alignment = .center
+        copyrightLabel.frame = NSRect(x: 0, y: 20, width: 300, height: 16)
+        contentView.addSubview(copyrightLabel)
+
+        window.contentView = contentView
+        aboutWindow = window
 
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
