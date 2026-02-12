@@ -153,6 +153,9 @@ class SelectionView: NSView {
     private enum ColorTarget { case foreground, background }
     private var activeColorTarget: ColorTarget = .foreground
 
+    // Clipboard for copy/paste annotations
+    private var copiedAnnotationSnapshot: AnnotationSnapshot?
+
     private let colorPalette: [NSColor] = [
         .red, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple,
         .white, .lightGray, .gray, .darkGray, .black, .systemPink,
@@ -680,6 +683,40 @@ class SelectionView: NSView {
                 performUndo()
             }
             return
+        }
+
+        // Cmd+C/X/V/D = clipboard operations
+        if event.modifierFlags.contains(.command) {
+            switch event.keyCode {
+            case 8: // C key - copy
+                copySelectedAnnotation()
+                return
+            case 7: // X key - cut
+                cutSelectedAnnotation()
+                return
+            case 9: // V key - paste
+                pasteAnnotation()
+                return
+            case 2: // D key - duplicate
+                duplicateSelectedAnnotation()
+                return
+            case 30: // ] key - bring forward / bring to front
+                if event.modifierFlags.contains(.shift) {
+                    bringSelectedToFront()
+                } else {
+                    bringSelectedForward()
+                }
+                return
+            case 33: // [ key - send backward / send to back
+                if event.modifierFlags.contains(.shift) {
+                    sendSelectedToBack()
+                } else {
+                    sendSelectedBackward()
+                }
+                return
+            default:
+                break
+            }
         }
 
         // If we're editing text, handle text input instead of shortcuts
@@ -1451,6 +1488,289 @@ class SelectionView: NSView {
         currentMousePosition = viewPos
         updateHoverState(at: viewPos)
         updateCoordDisplay(at: viewPos)
+    }
+
+    // MARK: - Right-Click Context Menu
+
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
+        // Hit test to find annotation under cursor (use bounding box for generous hit area)
+        var targetAnnotation: (any Annotation)?
+        for annotation in annotations.reversed() {
+            let rect = visualBounds(for: annotation).insetBy(dx: -4, dy: -4)
+            if rect.contains(point) {
+                targetAnnotation = annotation
+                break
+            }
+        }
+
+        // If right-clicked on an annotation, select it and show menu
+        if let annotation = targetAnnotation {
+            selectedAnnotation = annotation
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            updateSelectionHandlesLayer()
+            CATransaction.commit()
+            updateTextPopoverForSelection()
+
+            showAnnotationContextMenu(for: annotation, at: event)
+        } else if copiedAnnotationSnapshot != nil {
+            // Right-clicked on empty space with something copied - show paste menu
+            showPasteContextMenu(at: event, pastePoint: point)
+        }
+    }
+
+    private func showAnnotationContextMenu(for annotation: any Annotation, at event: NSEvent) {
+        let menu = NSMenu()
+
+        let cutItem = NSMenuItem(title: "Cut", action: #selector(contextMenuCut), keyEquivalent: "x")
+        cutItem.keyEquivalentModifierMask = .command
+        menu.addItem(cutItem)
+
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(contextMenuCopy), keyEquivalent: "c")
+        copyItem.keyEquivalentModifierMask = .command
+        menu.addItem(copyItem)
+
+        if copiedAnnotationSnapshot != nil {
+            let pasteItem = NSMenuItem(title: "Paste", action: #selector(contextMenuPaste), keyEquivalent: "v")
+            pasteItem.keyEquivalentModifierMask = .command
+            menu.addItem(pasteItem)
+        }
+
+        let duplicateItem = NSMenuItem(title: "Duplicate", action: #selector(contextMenuDuplicate), keyEquivalent: "d")
+        duplicateItem.keyEquivalentModifierMask = .command
+        menu.addItem(duplicateItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let index = annotations.firstIndex(where: { $0.id == annotation.id }) ?? 0
+        let isTop = index == annotations.count - 1
+        let isBottom = index == 0
+
+        let bringToFrontItem = NSMenuItem(title: "Bring to Front", action: isTop ? nil : #selector(contextMenuBringToFront), keyEquivalent: "]")
+        bringToFrontItem.keyEquivalentModifierMask = [.command, .shift]
+        if isTop { bringToFrontItem.isEnabled = false }
+        menu.addItem(bringToFrontItem)
+
+        let bringForwardItem = NSMenuItem(title: "Bring Forward", action: isTop ? nil : #selector(contextMenuBringForward), keyEquivalent: "]")
+        bringForwardItem.keyEquivalentModifierMask = .command
+        if isTop { bringForwardItem.isEnabled = false }
+        menu.addItem(bringForwardItem)
+
+        let sendBackwardItem = NSMenuItem(title: "Send Backward", action: isBottom ? nil : #selector(contextMenuSendBackward), keyEquivalent: "[")
+        sendBackwardItem.keyEquivalentModifierMask = .command
+        if isBottom { sendBackwardItem.isEnabled = false }
+        menu.addItem(sendBackwardItem)
+
+        let sendToBackItem = NSMenuItem(title: "Send to Back", action: isBottom ? nil : #selector(contextMenuSendToBack), keyEquivalent: "[")
+        sendToBackItem.keyEquivalentModifierMask = [.command, .shift]
+        if isBottom { sendToBackItem.isEnabled = false }
+        menu.addItem(sendToBackItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let deleteItem = NSMenuItem(title: "Delete", action: #selector(contextMenuDelete), keyEquivalent: "\u{8}")
+        deleteItem.keyEquivalentModifierMask = []
+        menu.addItem(deleteItem)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    private func showPasteContextMenu(at event: NSEvent, pastePoint: NSPoint) {
+        let menu = NSMenu()
+        // Store paste point for use in action
+        contextMenuPastePoint = pastePoint
+        let pasteItem = NSMenuItem(title: "Paste", action: #selector(contextMenuPasteAtPoint), keyEquivalent: "v")
+        pasteItem.keyEquivalentModifierMask = .command
+        menu.addItem(pasteItem)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    private var contextMenuPastePoint: NSPoint?
+
+    // MARK: - Context Menu Actions
+
+    @objc private func contextMenuCut() {
+        cutSelectedAnnotation()
+    }
+
+    @objc private func contextMenuCopy() {
+        copySelectedAnnotation()
+    }
+
+    @objc private func contextMenuPaste() {
+        pasteAnnotation()
+    }
+
+    @objc private func contextMenuPasteAtPoint() {
+        if let point = contextMenuPastePoint {
+            pasteAnnotation(at: point)
+        }
+        contextMenuPastePoint = nil
+    }
+
+    @objc private func contextMenuDuplicate() {
+        duplicateSelectedAnnotation()
+    }
+
+    @objc private func contextMenuBringToFront() {
+        bringSelectedToFront()
+    }
+
+    @objc private func contextMenuBringForward() {
+        bringSelectedForward()
+    }
+
+    @objc private func contextMenuSendBackward() {
+        sendSelectedBackward()
+    }
+
+    @objc private func contextMenuSendToBack() {
+        sendSelectedToBack()
+    }
+
+    @objc private func contextMenuDelete() {
+        deleteSelectedAnnotation()
+    }
+
+    // MARK: - Arrange Actions
+
+    private func bringSelectedToFront() {
+        guard let selected = selectedAnnotation,
+              let index = annotations.firstIndex(where: { $0.id == selected.id }),
+              index < annotations.count - 1 else { return }
+        pushUndoState()
+        let annotation = annotations.remove(at: index)
+        annotations.append(annotation)
+        reorderAnnotationLayers()
+        needsDisplay = true
+    }
+
+    private func bringSelectedForward() {
+        guard let selected = selectedAnnotation,
+              let index = annotations.firstIndex(where: { $0.id == selected.id }),
+              index < annotations.count - 1 else { return }
+        pushUndoState()
+        annotations.swapAt(index, index + 1)
+        reorderAnnotationLayers()
+        needsDisplay = true
+    }
+
+    private func sendSelectedBackward() {
+        guard let selected = selectedAnnotation,
+              let index = annotations.firstIndex(where: { $0.id == selected.id }),
+              index > 0 else { return }
+        pushUndoState()
+        annotations.swapAt(index, index - 1)
+        reorderAnnotationLayers()
+        needsDisplay = true
+    }
+
+    private func sendSelectedToBack() {
+        guard let selected = selectedAnnotation,
+              let index = annotations.firstIndex(where: { $0.id == selected.id }),
+              index > 0 else { return }
+        pushUndoState()
+        let annotation = annotations.remove(at: index)
+        annotations.insert(annotation, at: 0)
+        reorderAnnotationLayers()
+        needsDisplay = true
+    }
+
+    // MARK: - Clipboard Actions
+
+    private func copySelectedAnnotation() {
+        guard let selected = selectedAnnotation else { return }
+        copiedAnnotationSnapshot = snapshotAnnotations().first { snapshot in
+            switch snapshot {
+            case .arrow(let id, _, _, _, _): return id == selected.id
+            case .rectangle(let id, _, _, _): return id == selected.id
+            case .text(let id, _, _, _, _, _, _): return id == selected.id
+            }
+        }
+    }
+
+    private func cutSelectedAnnotation() {
+        copySelectedAnnotation()
+        deleteSelectedAnnotation()
+    }
+
+    private func pasteAnnotation(at point: NSPoint? = nil) {
+        guard let snapshot = copiedAnnotationSnapshot else { return }
+        pushUndoState()
+
+        let offset: CGFloat = point == nil ? 20 : 0
+        let newAnnotation: any Annotation
+
+        switch snapshot {
+        case .arrow(_, let startPoint, let endPoint, let color, let strokeWidth):
+            let dx = point.map { $0.x - startPoint.x } ?? offset
+            let dy = point.map { $0.y - startPoint.y } ?? offset
+            newAnnotation = ArrowAnnotation(
+                startPoint: CGPoint(x: startPoint.x + dx, y: startPoint.y + dy),
+                endPoint: CGPoint(x: endPoint.x + dx, y: endPoint.y + dy),
+                color: color, strokeWidth: strokeWidth
+            )
+        case .rectangle(_, let bounds, let color, let strokeWidth):
+            let dx = point.map { $0.x - bounds.midX } ?? offset
+            let dy = point.map { $0.y - bounds.midY } ?? offset
+            newAnnotation = RectangleAnnotation(
+                bounds: CGRect(x: bounds.origin.x + dx, y: bounds.origin.y + dy,
+                               width: bounds.width, height: bounds.height),
+                color: color, strokeWidth: strokeWidth
+            )
+        case .text(_, let text, let position, let fontSize, let color, let backgroundColor, let backgroundPadding):
+            let dx = point.map { $0.x - position.x } ?? offset
+            let dy = point.map { $0.y - position.y } ?? offset
+            newAnnotation = TextAnnotation(
+                text: text, position: CGPoint(x: position.x + dx, y: position.y + dy),
+                fontSize: fontSize, color: color, backgroundColor: backgroundColor,
+                backgroundPadding: backgroundPadding
+            )
+        }
+
+        annotations.append(newAnnotation)
+        selectedAnnotation = newAnnotation
+        syncAnnotationLayers()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        updateSelectionHandlesLayer()
+        CATransaction.commit()
+        needsDisplay = true
+    }
+
+    private func duplicateSelectedAnnotation() {
+        guard selectedAnnotation != nil else { return }
+        copySelectedAnnotation()
+        pasteAnnotation()
+    }
+
+    private func deleteSelectedAnnotation() {
+        guard let selected = selectedAnnotation else { return }
+        pushUndoState()
+        annotations.removeAll { $0.id == selected.id }
+        selectedAnnotation = nil
+        selectionHandleLayer?.removeFromSuperlayer()
+        selectionHandleLayer = nil
+        syncAnnotationLayers()
+        needsDisplay = true
+    }
+
+    /// Reorder CALayers to match the annotations array order
+    private func reorderAnnotationLayers() {
+        for (i, annotation) in annotations.enumerated() {
+            if let annotationLayer = annotationLayers[annotation.id] {
+                annotationLayer.zPosition = CGFloat(i)
+            }
+            if let headLayer = arrowHeadLayers[annotation.id] {
+                headLayer.zPosition = CGFloat(i) + 0.5
+            }
+        }
+        // Keep selection handles and hover highlight above all annotations
+        let top = CGFloat(annotations.count + 1)
+        selectionHandleLayer?.zPosition = top
+        hoverHighlightLayer?.zPosition = top
     }
 
     // MARK: - Drawing
@@ -2917,6 +3237,9 @@ class SelectionView: NSView {
                 annotationLayers[annotation.id] = newLayer
             }
         }
+
+        // Ensure layer z-ordering matches array order
+        reorderAnnotationLayers()
     }
 }
 
