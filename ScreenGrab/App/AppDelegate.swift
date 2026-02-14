@@ -274,22 +274,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 logError("Screen recording permission denied or error: \(error)")
+
+                // Reset stale TCC entry — macOS doesn't clear it when code signature changes,
+                // which causes the permission toggle to slide back. Resetting gives a fresh prompt on relaunch.
+                let bundleId = Bundle.main.bundleIdentifier ?? "com.sharexmac.app"
+                logInfo("Resetting ScreenCapture permission for \(bundleId)")
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+                process.arguments = ["reset", "ScreenCapture", bundleId]
+                try? process.run()
+                process.waitUntilExit()
+
                 // Show alert to user
                 await MainActor.run {
                     let alert = NSAlert()
                     alert.messageText = "Screen Recording Permission Required"
-                    alert.informativeText = "Please grant Screen Recording permission in System Settings " +
-                        "→ Privacy & Security → Screen Recording, then restart ScreenGrab."
+                    alert.informativeText = "ScreenGrab needs Screen Recording permission. " +
+                        "The app will now relaunch — please grant permission when prompted."
                     alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Open System Settings")
+                    alert.addButton(withTitle: "Relaunch")
                     alert.addButton(withTitle: "Quit")
 
                     let response = alert.runModal()
                     if response == .alertFirstButtonReturn {
-                        let urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-                        if let url = URL(string: urlString) {
-                            NSWorkspace.shared.open(url)
-                        }
+                        // Relaunch the app so macOS shows a fresh permission prompt
+                        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
                     }
                     NSApp.terminate(nil)
                 }
