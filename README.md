@@ -14,6 +14,15 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install domsleee/tap/screengrab
+```
+
+> [!NOTE]
+> ScreenGrab is ad-hoc signed and not notarized with Apple. The Homebrew cask automatically strips the quarantine attribute during install so macOS Gatekeeper won't block it. If you download the zip manually from GitHub Releases, you'll need to run `xattr -d com.apple.quarantine /Applications/ScreenGrab.app` before launching.
+
 ### Build from Source
 
 1. Make sure you have Xcode command line tools installed:
@@ -96,7 +105,7 @@ On first launch, macOS will ask for **Screen Recording** permission. Grant this 
 
 ## Requirements
 
-- macOS 14.0 (Sonoma) or later (uses ScreenCaptureKit)
+- macOS 13.0 (Ventura) or later
 - Screen Recording permission
 
 ## License
