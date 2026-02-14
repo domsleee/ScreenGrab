@@ -33,13 +33,15 @@ done
 echo "Building ScreenGrab..."
 if [ "$UNIVERSAL" = true ]; then
     swift build -c release --arch arm64 --arch x86_64
+    BUILD_BIN=".build/apple/Products/Release/ScreenGrab"
 else
     swift build -c release
+    BUILD_BIN=".build/release/ScreenGrab"
 fi
 
 echo "Creating app bundle..."
 mkdir -p ScreenGrab.app/Contents/MacOS
-cp .build/release/ScreenGrab ScreenGrab.app/Contents/MacOS/
+cp "$BUILD_BIN" ScreenGrab.app/Contents/MacOS/
 cp ScreenGrab/Resources/Info.plist ScreenGrab.app/Contents/Info.plist
 
 # Inject git commit hash and date into Info.plist
