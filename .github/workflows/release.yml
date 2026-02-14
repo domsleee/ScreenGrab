@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal binary
+        run: bash scripts/build.sh --universal --sign - --version "${{ steps.version.outputs.version }}"
+
+      - name: Package zip
+        run: zip -r "ScreenGrab-${{ github.ref_name }}.zip" ScreenGrab.app
+
+      - name: Compute SHA256
+        id: sha
+        run: echo "sha256=$(shasum -a 256 "ScreenGrab-${{ github.ref_name }}.zip" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ScreenGrab-${{ github.ref_name }}.zip
+          generate_release_notes: true
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.sha.outputs.sha256 }}"
+          TAG="${{ github.ref_name }}"
+
+          cat > screengrab.rb <<CASK
+          cask "screengrab" do
+            version "${VERSION}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/domsleee/screen-grab/releases/download/${TAG}/ScreenGrab-${TAG}.zip"
+            name "ScreenGrab"
+            desc "ShareX-like screen capture for macOS"
+            homepage "https://github.com/domsleee/screen-grab"
+
+            depends_on macos: ">= :ventura"
+
+            postflight do
+              system "xattr", "-d", "com.apple.quarantine", "#{appdir}/ScreenGrab.app"
+            end
+
+            app "ScreenGrab.app"
+          end
+          CASK
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' screengrab.rb
+
+          # Clone tap repo and push updated cask
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/domsleee/homebrew-tap.git" tap-repo
+          mkdir -p tap-repo/Casks
+          cp screengrab.rb tap-repo/Casks/screengrab.rb
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/screengrab.rb
+          git commit -m "Update screengrab to ${VERSION}"
+          git push
