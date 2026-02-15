@@ -416,11 +416,7 @@ class SelectionView: NSView {
 
         isHoveringSelectedHandle = false
 
-        // Arrow cursor when hovering over any popover
-        if isPointInsidePopover(point) {
-            NSCursor.arrow.set()
-            return
-        }
+        if setArrowCursorIfOverPopover(point) { return }
 
         // Text editing always gets iBeam
         if editingTextAnnotation != nil {
@@ -521,11 +517,7 @@ class SelectionView: NSView {
     }
 
     private func updateCoordDisplay(at point: NSPoint) {
-        // Arrow cursor when hovering over any popover
-        if isPointInsidePopover(point) {
-            NSCursor.arrow.set()
-            return
-        }
+        if setArrowCursorIfOverPopover(point) { return }
         // Show iBeam when editing text
         if editingTextAnnotation != nil {
             NSCursor.iBeam.set()
@@ -540,8 +532,8 @@ class SelectionView: NSView {
     }
 
     private func updateCursorForMode() {
-        if let pos = currentMousePosition, isPointInsidePopover(pos) {
-            NSCursor.arrow.set()
+        if let pos = currentMousePosition, setArrowCursorIfOverPopover(pos) {
+            // handled
         } else if editingTextAnnotation != nil {
             NSCursor.iBeam.set()
         } else if currentMode == .select {
@@ -618,11 +610,7 @@ class SelectionView: NSView {
             crosshairCursor?.set()
             return
         }
-        // Arrow cursor when hovering over any popover
-        if let pos = currentMousePosition, isPointInsidePopover(pos) {
-            NSCursor.arrow.set()
-            return
-        }
+        if let pos = currentMousePosition, setArrowCursorIfOverPopover(pos) { return }
         if let pos = currentMousePosition {
             updateHoverState(at: pos)
         }
@@ -1470,8 +1458,7 @@ class SelectionView: NSView {
 
             // Recompute popover position after annotation was moved/resized
             if isTextPopoverVisible {
-                lockedTextPopoverRect = nil
-                _ = textPopoverRect()
+                recomputeTextPopoverRect()
             }
 
             needsDisplay = true
@@ -2489,6 +2476,26 @@ class SelectionView: NSView {
 
     private let textPopoverWidth: CGFloat = 260
     private let textPopoverPadding: CGFloat = 10
+    private let fontSizeFieldWidth: CGFloat = 38
+
+    /// Compute rects for the font size row elements given the popover rect and Y position.
+    /// Shared between draw and click handlers to guarantee layout consistency.
+    private func fontSizeRowLayout(popover: NSRect, curY: CGFloat) -> (fieldRect: NSRect, presetButtons: [NSRect]) {
+        let p = textPopoverPadding
+        let sizeRowHeight: CGFloat = 24
+        let fieldRect = NSRect(x: popover.minX + p, y: curY, width: fontSizeFieldWidth, height: sizeRowHeight)
+
+        let sizeStartX = popover.minX + p + fontSizeFieldWidth + 4
+        let sizeGap: CGFloat = 3
+        let sizeBtnWidth = (popover.maxX - p - sizeStartX - CGFloat(fontSizePresets.count - 1) * sizeGap) / CGFloat(fontSizePresets.count)
+
+        var buttons: [NSRect] = []
+        for i in 0..<fontSizePresets.count {
+            buttons.append(NSRect(x: sizeStartX + CGFloat(i) * (sizeBtnWidth + sizeGap),
+                                  y: curY, width: sizeBtnWidth, height: sizeRowHeight))
+        }
+        return (fieldRect, buttons)
+    }
 
     /// Returns the annotation rect that the text popover should anchor to.
     private func textPopoverAnchor() -> CGRect? {
@@ -2502,11 +2509,21 @@ class SelectionView: NSView {
     }
 
     /// Returns true if the given point is inside any visible popover (text or color).
-    func isPointInsidePopover(_ point: NSPoint) -> Bool {
+    private func isPointInsidePopover(_ point: NSPoint) -> Bool {
         if isTextPopoverVisible && textPopoverRect().contains(point) {
             return true
         }
         if isColorPopoverVisible && colorPopoverRect().contains(point) {
+            return true
+        }
+        return false
+    }
+
+    /// If the point is over a popover, sets arrow cursor and returns true.
+    /// Use as an early-return guard in cursor-update methods.
+    private func setArrowCursorIfOverPopover(_ point: NSPoint) -> Bool {
+        if isPointInsidePopover(point) {
+            NSCursor.arrow.set()
             return true
         }
         return false
@@ -2519,6 +2536,12 @@ class SelectionView: NSView {
         let computed = computeTextPopoverRect()
         lockedTextPopoverRect = computed
         return computed
+    }
+
+    /// Clears the cached popover rect and recomputes it.
+    private func recomputeTextPopoverRect() {
+        lockedTextPopoverRect = nil
+        lockedTextPopoverRect = computeTextPopoverRect()
     }
 
     private func computeTextPopoverRect() -> NSRect {
@@ -2618,14 +2641,13 @@ class SelectionView: NSView {
         ]
 
         // --- Font Size Row ---
-        let sizeRowHeight: CGFloat = 24
-        curY -= sizeRowHeight
+        curY -= 24  // sizeRowHeight
+        let layout = fontSizeRowLayout(popover: popover, curY: curY)
 
         let displaySize = editingTextAnnotation?.fontSize ?? (selectedAnnotation as? TextAnnotation)?.fontSize ?? textFontSize
 
         // Editable size field
-        let fieldWidth: CGFloat = 38
-        let fieldRect = NSRect(x: popover.minX + p, y: curY, width: fieldWidth, height: sizeRowHeight)
+        let fieldRect = layout.fieldRect
         fontSizeFieldRect = fieldRect
         NSColor.white.withAlphaComponent(0.12).setFill()
         NSBezierPath(roundedRect: fieldRect, xRadius: 4, yRadius: 4).fill()
@@ -2647,9 +2669,6 @@ class SelectionView: NSView {
         }
 
         // Preset size buttons
-        let sizeStartX = popover.minX + p + fieldWidth + 4
-        let sizeGap: CGFloat = 3
-        let sizeBtnWidth = (popover.maxX - p - sizeStartX - CGFloat(fontSizePresets.count - 1) * sizeGap) / CGFloat(fontSizePresets.count)
         let sizeAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.8)
@@ -2659,8 +2678,7 @@ class SelectionView: NSView {
             .foregroundColor: NSColor.white
         ]
         for (i, preset) in fontSizePresets.enumerated() {
-            let btnRect = NSRect(x: sizeStartX + CGFloat(i) * (sizeBtnWidth + sizeGap),
-                                 y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+            let btnRect = layout.presetButtons[i]
             let isActive = Int(displaySize) == Int(preset)
             if isActive {
                 NSColor.white.withAlphaComponent(0.25).setFill()
@@ -2802,23 +2820,18 @@ class SelectionView: NSView {
         curY -= 8 + 1 + 6
 
         // --- Font Size Row ---
-        let sizeRowHeight: CGFloat = 24
-        curY -= sizeRowHeight
+        curY -= 24  // sizeRowHeight
+        let sizeLayout = fontSizeRowLayout(popover: popover, curY: curY)
 
         // Editable size field
-        if fontSizeFieldRect.contains(point) {
+        if sizeLayout.fieldRect.contains(point) {
             showFontSizeTextField()
             return true
         }
 
         // Preset size buttons
-        let fieldWidth: CGFloat = 38
-        let sizeStartX = popover.minX + p + fieldWidth + 4
-        let sizeGap: CGFloat = 3
-        let sizeBtnWidth = (popover.maxX - p - sizeStartX - CGFloat(fontSizePresets.count - 1) * sizeGap) / CGFloat(fontSizePresets.count)
         for (i, preset) in fontSizePresets.enumerated() {
-            let btnRect = NSRect(x: sizeStartX + CGFloat(i) * (sizeBtnWidth + sizeGap),
-                                 y: curY, width: sizeBtnWidth, height: sizeRowHeight)
+            let btnRect = sizeLayout.presetButtons[i]
             if btnRect.contains(point) {
                 let newSize = preset.clampedTo(fontSizeRange)
                 if let editing = editingTextAnnotation {
@@ -2832,8 +2845,7 @@ class SelectionView: NSView {
                 } else {
                     textFontSize = newSize
                 }
-                lockedTextPopoverRect = nil
-                _ = textPopoverRect()
+                recomputeTextPopoverRect()
                 needsDisplay = true
                 return true
             }
@@ -2897,8 +2909,7 @@ class SelectionView: NSView {
     private func showTextPopover() {
         isTextPopoverVisible = true
         isColorPopoverVisible = false
-        lockedTextPopoverRect = nil  // clear so it recomputes fresh
-        _ = textPopoverRect()        // compute and cache
+        recomputeTextPopoverRect()
         needsDisplay = true
     }
 
@@ -2957,8 +2968,7 @@ class SelectionView: NSView {
             } else {
                 textFontSize = newSize
             }
-            lockedTextPopoverRect = nil
-            _ = textPopoverRect()
+            recomputeTextPopoverRect()
         }
         dismissFontSizeField()
         needsDisplay = true
