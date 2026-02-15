@@ -42,16 +42,16 @@ macOS will prompt for **Screen Recording** permission on first launch (System Se
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `⌘⇧2` | Start capture |
-| `R` | Rectangle tool |
-| `A` | Arrow tool |
-| `T` | Text tool |
-| `S` | Select tool |
-| `Delete` | Delete selected annotation |
-| `⌘Z` / `⌘⇧Z` | Undo / Redo |
-| `ESC` | Cancel |
+| Shortcut         | Action                    |
+|------------------|---------------------------|
+| `⌘⇧2`           | Start capture             |
+| `R`              | Rectangle tool            |
+| `A`              | Arrow tool                |
+| `T`              | Text tool                 |
+| `S`              | Select tool               |
+| `Delete`         | Delete selected annotation |
+| `⌘Z` / `⌘⇧Z`   | Undo / Redo               |
+| `ESC`            | Cancel                    |
 
 ## Requirements
 
