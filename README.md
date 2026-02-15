@@ -4,7 +4,7 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
 
 ## Demo
 
-<video src="docs/demo.mp4" autoplay loop muted></video>
+<video src="https://github.com/domsleee/screen-grab/releases/download/demo/demo.mp4" autoplay loop muted playsinline></video>
 
 ## Features
 
