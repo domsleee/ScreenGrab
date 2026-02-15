@@ -13,6 +13,8 @@ class ScreenshotPreviewWindow: NSPanel {
     private var filePath: String?
     private var isDragging = false
     private var dragStartLocation: NSPoint = .zero
+    private var initialFrame: NSRect = .zero
+    var onDismiss: (() -> Void)?
 
     init(image: NSImage, filePath: String?, screen: NSScreen) {
         self.filePath = filePath
@@ -70,19 +72,20 @@ class ScreenshotPreviewWindow: NSPanel {
 
         // Slide in
         let finalX = visibleFrame.maxX - thumbWidth - Self.padding
+        let finalFrame = NSRect(x: finalX, y: startY, width: thumbWidth, height: thumbHeight)
+        self.initialFrame = finalFrame
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Self.animationDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            self.animator().setFrame(
-                NSRect(x: finalX, y: startY, width: thumbWidth, height: thumbHeight),
-                display: true
-            )
+            self.animator().setFrame(finalFrame, display: true)
         }
 
-        // Auto-dismiss timer
-        dismissTimer = Timer.scheduledTimer(withTimeInterval: Self.displayDuration, repeats: false) { [weak self] _ in
+        // Auto-dismiss timer — explicitly use main RunLoop
+        let timer = Timer(timeInterval: Self.displayDuration, repeats: false) { [weak self] _ in
             self?.fadeOutAndClose()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        dismissTimer = timer
     }
 
     deinit {
@@ -115,8 +118,10 @@ class ScreenshotPreviewWindow: NSPanel {
 
     override func mouseUp(with event: NSEvent) {
         if isDragging {
-            // Dragged away - dismiss
-            fadeOutAndClose()
+            // Only dismiss if dragged past the window's original edge
+            if !self.frame.intersects(initialFrame) {
+                fadeOutAndClose()
+            }
         } else {
             // Click - open file in Finder
             if let filePath = filePath {
@@ -139,6 +144,7 @@ class ScreenshotPreviewWindow: NSPanel {
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             self?.orderOut(nil)
+            self?.onDismiss?()
         })
     }
 
@@ -146,5 +152,6 @@ class ScreenshotPreviewWindow: NSPanel {
         dismissTimer?.invalidate()
         dismissTimer = nil
         orderOut(nil)
+        onDismiss?()
     }
 }

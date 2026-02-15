@@ -150,6 +150,9 @@ class ScreenCaptureManager {
         }) ?? NSScreen.main else { return }
 
         let preview = ScreenshotPreviewWindow(image: image, filePath: filePath, screen: screen)
+        preview.onDismiss = { [weak self] in
+            self?.previewWindow = nil
+        }
         preview.orderFrontRegardless()
         previewWindow = preview
     }
