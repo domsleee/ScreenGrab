@@ -257,88 +257,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestScreenRecordingPermission() {
-        // CGPreflightScreenCaptureAccess is unreliable with self-signed certs.
-        // Instead, check if we can actually see other windows' names.
-        if canRecordScreen() {
+        if CGPreflightScreenCaptureAccess() {
             logInfo("Screen recording permission already granted")
             return
         }
 
-        // Become regular app so permission dialog stays visible
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-
-        // Trigger TCC registration
+        // CGPreflightScreenCaptureAccess returns false with trusted self-signed certs
+        // even when captures work. Use SCShareableContent as the real test.
         Task {
-            _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        }
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                logInfo("Screen recording permission verified")
+            } catch {
+                logError("Screen recording permission denied: \(error)")
+                await MainActor.run {
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
 
-        // Poll using the reliable check
-        pollForPermission(attemptsLeft: 60)
-    }
+                    let alert = NSAlert()
+                    alert.messageText = "Screen Recording Permission Required"
+                    alert.informativeText = "ScreenGrab needs Screen Recording permission to capture your screen.\n\n" +
+                        "Open System Settings, enable ScreenGrab under Screen Recording, then click Relaunch."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Open System Settings")
+                    alert.addButton(withTitle: "Relaunch")
+                    alert.addButton(withTitle: "Quit")
 
-    /// Checks actual screen recording ability by testing if we can read other apps' window names.
-    /// More reliable than CGPreflightScreenCaptureAccess with self-signed certs.
-    private func canRecordScreen() -> Bool {
-        let pid = ProcessInfo.processInfo.processIdentifier
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
-            as? [[String: Any]] else { return false }
-        for window in windowList {
-            guard let windowPid = window[kCGWindowOwnerPID as String] as? pid_t,
-                  windowPid != pid else { continue }
-            // If we can see another app's window name, we have permission
-            if window[kCGWindowName as String] as? String != nil {
-                return true
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                        // Don't quit — let user grant permission then come back and click Relaunch
+                        self.requestScreenRecordingPermission()
+                    } else if response == .alertSecondButtonReturn {
+                        self.relaunchApp()
+                    } else {
+                        NSApp.terminate(nil)
+                    }
+                }
             }
-        }
-        return false
-    }
-
-    private func pollForPermission(attemptsLeft: Int) {
-        if canRecordScreen() {
-            logInfo("Screen recording permission granted")
-            NSApp.setActivationPolicy(.accessory)
-            return
-        }
-
-        if attemptsLeft > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.pollForPermission(attemptsLeft: attemptsLeft - 1)
-            }
-            return
-        }
-
-        // Timed out — show fallback dialog
-        let alert = NSAlert()
-        alert.messageText = "Screen Recording Permission Required"
-        alert.informativeText = "ScreenGrab needs Screen Recording permission. " +
-            "Please enable it in System Settings → Privacy & Security → Screen Recording, then click Relaunch."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Relaunch")
-        alert.addButton(withTitle: "Quit")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-            NSApp.terminate(nil)
-        } else if response == .alertSecondButtonReturn {
-            self.relaunchApp()
-        } else {
-            NSApp.terminate(nil)
         }
     }
 
     private func relaunchApp() {
-        let bundlePath = Bundle.main.bundlePath
-        logInfo("Relaunching from: \(bundlePath)")
-        let url = URL(fileURLWithPath: bundlePath)
+        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
-            if let error = error {
-                logError("Relaunch failed: \(error)")
-            }
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
