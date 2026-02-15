@@ -9,9 +9,9 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
 ## Features
 
 - **Global Hotkey**: `⌘⇧2` to start capture from anywhere
-- **Region Selection**: Click and drag to select — screenshot is taken on release
-- **Annotations**: Draw rectangles (`R`), arrows (`A`), or select/move them (`V`)
-- **Auto-save & clipboard**: Copies to clipboard and saves to `~/Pictures/ScreenGrab/`
+- **Region Selection**: Click and drag to select — screenshot is captured when you release the mouse button
+- **Annotations**: Draw rectangles (`R`), arrows (`A`), text (`T`), with customizable colors — or select/move them (`V`)
+- **Auto-save & clipboard**: Copies to clipboard and saves to a configurable location (default `~/Pictures/ScreenGrab/`)
 - **Preview thumbnail**: macOS-style thumbnail after capture — click to reveal in Finder
 
 ## Installation
@@ -23,20 +23,20 @@ brew install domsleee/tap/screengrab
 ```
 
 > [!NOTE]
-> ScreenGrab is ad-hoc signed and not notarized with Apple (same approach as [AeroSpace](https://github.com/nikitabobko/AeroSpace)). The Homebrew cask automatically strips the quarantine attribute during install so macOS Gatekeeper won't block it. If you download the zip manually from GitHub Releases, you'll need to run `xattr -d com.apple.quarantine /Applications/ScreenGrab.app` before launching.
+> ScreenGrab is ad-hoc signed and not notarized with Apple (same approach as [AeroSpace](https://github.com/nikitabobko/AeroSpace)). The Homebrew cask automatically strips the quarantine attribute during install so macOS Gatekeeper won't block it. If you download the zip manually from [GitHub Releases](https://github.com/domsleee/ScreenGrab/releases), you'll need to run `xattr -d com.apple.quarantine /Applications/ScreenGrab.app` before launching.
 
 ### Build from Source
 
 ```bash
 xcode-select --install  # if needed
-git clone <repo-url>
+git clone https://github.com/domsleee/ScreenGrab.git
 cd ScreenGrab
-bash scripts/install.sh
+bash scripts/install.sh  # builds and copies ScreenGrab.app to /Applications
 ```
 
 ## Usage
 
-Launch ScreenGrab — it runs in the background with a menu bar icon.
+Launch ScreenGrab — it runs in the background with a menu bar icon. Click the icon to start a capture, open settings, or quit.
 
 On first launch, macOS will ask for **Screen Recording** permission (System Settings → Privacy & Security → Screen & System Audio Recording).
 
@@ -47,6 +47,7 @@ On first launch, macOS will ask for **Screen Recording** permission (System Sett
 | `⌘⇧2` | Start capture |
 | `R` | Rectangle tool |
 | `A` | Arrow tool |
+| `T` | Text tool |
 | `V` | Select tool |
 | `Delete` | Delete selected annotation |
 | `⌘Z` / `⌘⇧Z` | Undo / Redo |
