@@ -394,13 +394,15 @@ class SelectionView: NSView {
     private func updateCursorWithCoords(_ point: NSPoint) {
         // Guard against calling from contexts where font operations may crash
         guard let _ = window else { return }
-        // Only rebuild when integer coords change (sub-pixel moves reuse the cached cursor)
+        // Only rebuild and re-register when integer coords change.
+        // NSCursor.set() is expensive (~80% of mouseMoved cost) because the system
+        // re-registers the cursor image with the window server on every call.
         let key = "\(Int(point.x)), \(Int(point.y))"
         if key != lastCrosshairCoordKey {
             lastCrosshairCoordKey = key
             buildCrosshairCursor(at: point)
+            crosshairCursor?.set()
         }
-        crosshairCursor?.set()
     }
 
     /// Returns the full visual bounding rect for an annotation, including arrowhead extent.
