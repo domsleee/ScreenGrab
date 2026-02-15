@@ -10,7 +10,7 @@ A lightweight screenshot tool for macOS with annotation capabilities, inspired b
 
 - **Global Hotkey**: `⌘⇧2` to start capture from anywhere
 - **Region Selection**: Click and drag to select — screenshot is captured when you release the mouse button
-- **Annotations**: Draw rectangles (`R`), arrows (`A`), text (`T`), with customizable colors — or select/move them (`V`)
+- **Annotations**: Draw rectangles (`R`), arrows (`A`), text (`T`), with customizable colors — or select/move them (`S`)
 - **Auto-save & clipboard**: Copies to clipboard and saves to a configurable location (default `~/Pictures/ScreenGrab/`)
 - **Preview thumbnail**: macOS-style thumbnail after capture — click to reveal in Finder
 
@@ -48,7 +48,7 @@ macOS will prompt for **Screen Recording** permission on first launch (System Se
 | `R` | Rectangle tool |
 | `A` | Arrow tool |
 | `T` | Text tool |
-| `V` | Select tool |
+| `S` | Select tool |
 | `Delete` | Delete selected annotation |
 | `⌘Z` / `⌘⇧Z` | Undo / Redo |
 | `ESC` | Cancel |
