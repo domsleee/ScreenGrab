@@ -7,6 +7,7 @@ class ScreenshotPreviewWindow: NSPanel {
     private static let displayDuration: TimeInterval = 5
     private static let animationDuration: TimeInterval = 0.3
     private static let fadeOutDuration: TimeInterval = 0.5
+    private static let dragThresholdSquared: CGFloat = 25
 
     private var dismissTimer: Timer?
     private var filePath: String?
@@ -84,6 +85,10 @@ class ScreenshotPreviewWindow: NSPanel {
         }
     }
 
+    deinit {
+        dismissTimer?.invalidate()
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
@@ -96,7 +101,7 @@ class ScreenshotPreviewWindow: NSPanel {
         let current = event.locationInWindow
         let dx = current.x - dragStartLocation.x
         let dy = current.y - dragStartLocation.y
-        if !isDragging && (dx * dx + dy * dy) > 25 {
+        if !isDragging && (dx * dx + dy * dy) > Self.dragThresholdSquared {
             isDragging = true
         }
         if isDragging {

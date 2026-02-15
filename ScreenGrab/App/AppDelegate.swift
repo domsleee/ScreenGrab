@@ -283,12 +283,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     alert.addButton(withTitle: "Relaunch")
                     alert.addButton(withTitle: "Quit")
 
-                    let response = alert.runModal()
-                    if response == .alertFirstButtonReturn {
+                    var response = alert.runModal()
+                    while response == .alertFirstButtonReturn {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                        // Don't quit — let user grant permission then come back and click Relaunch
-                        self.requestScreenRecordingPermission()
-                    } else if response == .alertSecondButtonReturn {
+                        // Show the same dialog again so user can click Relaunch when ready
+                        response = alert.runModal()
+                    }
+                    if response == .alertSecondButtonReturn {
                         self.relaunchApp()
                     } else {
                         NSApp.terminate(nil)
@@ -302,7 +303,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let url = URL(fileURLWithPath: Bundle.main.bundlePath)
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error = error {
+                logError("Relaunch failed: \(error)")
+            }
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }

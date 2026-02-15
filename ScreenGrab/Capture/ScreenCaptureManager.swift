@@ -86,15 +86,13 @@ class ScreenCaptureManager {
 
             // Play capture sound
             if AppSettings.shared.playSound {
-                NSSound(contentsOf: URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif"), byReference: true)?.play()
+                let sound = NSSound(contentsOf: URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif"), byReference: true) ?? NSSound(named: .init("Tink"))
+                sound?.play()
             }
 
             // Show preview thumbnail on the screen where the capture happened
-            let captureImage = nsImage
-            let captureFilePath = savedPath
-            let captureScreenFrame = screenFrame
             DispatchQueue.main.async { [weak self] in
-                self?.showPreviewThumbnail(image: captureImage, filePath: captureFilePath, screenFrame: captureScreenFrame)
+                self?.showPreviewThumbnail(image: nsImage, filePath: savedPath, screenFrame: screenFrame)
             }
         }
 
@@ -147,7 +145,9 @@ class ScreenCaptureManager {
         previewWindow = nil
 
         // Find the NSScreen matching the capture screen frame
-        let screen = NSScreen.screens.first(where: { abs($0.frame.origin.x - screenFrame.origin.x) < 1 && abs($0.frame.width - screenFrame.width) < 1 }) ?? NSScreen.main ?? NSScreen.screens[0]
+        guard let screen = NSScreen.screens.first(where: {
+            abs($0.frame.origin.x - screenFrame.origin.x) < 1 && abs($0.frame.width - screenFrame.width) < 1
+        }) ?? NSScreen.main else { return }
 
         let preview = ScreenshotPreviewWindow(image: image, filePath: filePath, screen: screen)
         preview.orderFrontRegardless()
