@@ -107,7 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    private static let repoURL = "https://github.com/domsleee/screen-grab"
+    private static let repoURL = "https://github.com/domsleee/ScreenGrab"
 
     @objc func showAbout() {
         if let existing = aboutWindow, existing.isVisible {

@@ -30,7 +30,7 @@ brew install domsleee/tap/screengrab
 ```bash
 xcode-select --install  # if needed
 git clone <repo-url>
-cd screen-grab
+cd ScreenGrab
 bash scripts/install.sh
 ```
 
