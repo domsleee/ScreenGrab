@@ -14,11 +14,11 @@ open /Applications/ScreenGrab.app
 
 The build script (`scripts/build.sh`) accepts flags:
 
-| Flag | Description |
-|------|-------------|
-| `--universal` | Build universal binary (arm64 + x86_64) |
-| `--sign <identity>` | Code-signing identity (default: `ScreenGrab Dev`) |
-| `--version <ver>` | Set version for release builds |
+| Flag                 | Description                                      |
+|----------------------|--------------------------------------------------|
+| `--universal`        | Build universal binary (arm64 + x86_64)          |
+| `--sign <identity>`  | Code-signing identity (default: `ScreenGrab Dev`) |
+| `--version <ver>`    | Set version for release builds                   |
 
 ## Self-Signed Certificate
 
@@ -59,10 +59,10 @@ codesign -dvvv /Applications/ScreenGrab.app 2>&1 | grep Authority
 
 ## Dev vs Release Builds
 
-| | Dev build (default) | Release build (`--version`) |
-|---|---|---|
-| Bundle ID | `com.screengrab.app.dev` | `com.screengrab.app` |
-| App name | ScreenGrab Dev | ScreenGrab |
-| Signing | Self-signed, no hardened runtime | Hardened runtime (for notarization) |
+|           | Dev build (default)              | Release build (`--version`)         |
+|-----------|----------------------------------|-------------------------------------|
+| Bundle ID | `com.screengrab.app.dev`         | `com.screengrab.app`                |
+| App name  | ScreenGrab Dev                   | ScreenGrab                          |
+| Signing   | Self-signed, no hardened runtime | Hardened runtime (for notarization) |
 
 Dev builds use a separate bundle ID so macOS doesn't confuse permissions between your development copy and an installed release.
